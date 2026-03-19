@@ -1,0 +1,55 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-serif: "Playfair Display", Georgia, serif;
+  --font-sans: "Inter", system-ui, sans-serif;
+
+  --color-background: hsl(30 20% 98%); /* warm cream white */
+  --color-foreground: hsl(0 0% 12%); /* near-black */
+
+  --color-card: hsl(30 20% 98%);
+  --color-card-foreground: hsl(0 0% 12%);
+
+  --color-popover: hsl(30 20% 98%);
+  --color-popover-foreground: hsl(0 0% 12%);
+
+  --color-primary: hsl(347 52% 52%); /* deep rose */
+  --color-primary-foreground: hsl(0 0% 100%);
+
+  --color-secondary: hsl(40 60% 88%); /* champagne gold */
+  --color-secondary-foreground: hsl(0 0% 12%);
+
+  --color-muted: hsl(30 15% 94%);
+  --color-muted-foreground: hsl(0 0% 45%);
+
+  --color-accent: hsl(347 30% 95%); /* blush pink */
+  --color-accent-foreground: hsl(0 0% 12%);
+
+  --color-destructive: hsl(0 50% 50%);
+  --color-destructive-foreground: hsl(0 0% 98%);
+
+  --color-border: hsl(30 20% 88%);
+  --color-input: hsl(30 20% 88%);
+  --color-ring: hsl(347 52% 52%);
+
+  --radius-sm: 0.2rem;
+  --radius-md: 0.4rem;
+  --radius-lg: 0.6rem;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply font-sans antialiased bg-background text-foreground selection:bg-secondary selection:text-secondary-foreground;
+    background-image: radial-gradient(hsl(347 52% 52% / 0.06) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-serif font-semibold tracking-tight;
+  }
+}

@@ -1,0 +1,52 @@
+can we customize our prompt for sending to the imagen like -
+Use the following user inputs to design one jewellery piece.
+If any field is missing, “any”, or “no preference”, you should make a balanced, commercial, wearable design that fits the rest of the brief.
+- Jewellery Category: {{category}}
+Examples: Long necklace, Choker, Necklace, ring, earrings, bracelet, bangles, pendant, maang tikka, nose pin, anklet, set (necklace + earrings), etc.
+- Price Range / Budget: {{price_range}}
+Examples: Up to 8 Lakhs, 15+ Lakhs
+- Theme (Occasion): {{theme}}
+Examples: Wearable - Daily (WRD), Wearable- Occasional (WRO), Collectable - Occasional (CLO), Solitaire - Daily (SOLD), Solitaire - Occasional (SOLO), Solitaire - Premium (SOLP), Bridal - Classic (BRC), Bridal- Premium (BRP), Bridal - Unique (BRU) etc.
+- Gemstones & Colours: {{gemstones}}
+Examples: Emerald, Rubies, Sapphires, Pink tourmaline,Navratna, Amethyst
+Show gemstones as shaded shapes / labels, not photo-realistic texture.
+- Motif Category: {{motif_category}}
+Example: Animal & Bird, Celestial & Spiritual, Contemporary Luxury, Forms & Shapes, Nature-Inspired etc.
+- Specific Motifs: {{motifs}}
+Example: Swan, Parrot, Peacock, Elephant, Butterfly, Art Deco, Scallop, Ribbons, Geometric, Ovals, Marquise, Domes & Arches, Curves, Pears, Jaali pattern, Lotus, Paan, Paisley, Leaves, Cluster flowers, Crescent moon etc
+- Additional Remarks / Special Instructions: {{customNotes}}
+Examples: very lightweight; openable clasp; adjustable length; no sharp edges; kid-friendly; avoid pointy parts; matching with mangalsutra; works with Indo-western outfits; focus on comfort; avoid too big size; oversized statement piece; etc.
+
+Output Style & Composition Guidelines
+
+View & Framing:
+
+Show the jewellery clearly from the front view, centered on the page.
+
+For necklaces/sets: include a clear layout of the full piece (no human neck or body, only the jewellery outline).
+
+For rings/earrings/bangles: show 1 main view; optionally a small side-view sketch in the corner.
+
+Line & Sketch Style:
+
+Fine, precise designer-style sketch: clean, controlled line art, light shading.
+
+Use simple indications for gemstones (ovals, rounds, squares) and label key stones if needed (e.g., “emerald”, “polki”).
+
+Avoid painterly shading, gradients, or photo-realism. This is a concept sketch, not a rendered product photo.
+
+Annotations (Optional but Minimal):
+
+You may add tiny designer notes near the sketch like:
+
+“pearl piroi”, “kundan cluster”, “emerald drop”, “textured gold plate”, “openable hinge”.
+
+Keep annotations neat and minimal to preserve the clean look.
+
+Background & Environment:
+
+Strictly plain white background, like blank sketchbook paper.
+
+No props, no hands, no faces, no bust stands, no shadows, no branding, no text other than small design notes.
+
+Using all the structured inputs above, create one high-resolution, hand-drawn style jewellery design sketch on clean white paper with pure white background, precisely reflecting the chosen category, price_range, theme, gemstones, motif_category, motifs, customNotes. Keep the look professional, minimal, and suitable for a jewellery designer’s catalog or client presentation.
