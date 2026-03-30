@@ -14,6 +14,21 @@ function getAI(): GoogleGenAI {
 const GOOGLE_CLOUD_PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT_ID || "";
 const VERTEX_AI_LOCATION = "us-central1";
 
+/** Retry once on transient Gemini errors (DEADLINE_EXCEEDED / UNAVAILABLE). */
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("DEADLINE_EXCEEDED") || msg.includes("UNAVAILABLE") || msg.includes("503")) {
+      console.warn("[Gemini] Transient error, retrying once:", msg);
+      await new Promise(r => setTimeout(r, 3000));
+      return fn();
+    }
+    throw err;
+  }
+}
+
 export interface VisionAnalysisResult {
   description: string;
   styleElements: string[];
@@ -177,7 +192,7 @@ export function buildDesignContext(
 // Build a comprehensive prompt for image generation with RAG-enhanced style transfer
 export function buildImagePrompt(request: DesignContext): string {
   // Use exactly what the user selected for stones
-  let stonesList = request.stones && request.stones.length > 0 ? [...request.stones] : ["Polki", "Ruby", "Emerald"];
+  let stonesList = request.stones && request.stones.length > 0 ? [...request.stones] : ["Polki"];
   
   // Ensure Polki is always included (add if not present)
   if (!stonesList.map(s => s.toLowerCase()).includes("polki")) {
@@ -239,7 +254,7 @@ export function buildImagePrompt(request: DesignContext): string {
 4. GOLD MINIMIZATION (THE "INVISIBLE" RULE):
    - Gold must be strictly limited to the structural framework ONLY.
    - The "walls" of gold between Polki stones must be hairline-thin.
-   - Every millimeter of the gold framework must be encrusted with tiny, micro-Polki accents.
+   - Every millimeter of the gold framework must be encrusted with Polki accents (stone size must match the designer-specified polki size — do NOT default to tiny accents if large polki have been requested).
    - Visual Goal: A continuous surface of Polki stones where the gold is merely a shimmering outline.
    - NO solid gold plates, NO thick bands, NO visible flat gold surfaces.
 5. MANDATORY VIEW: Generate ONLY a flat front-view (straight-on, facing viewer). NEVER show side angles, 3/4 perspective, tilted views, or any rotation. The piece must appear as a flat technical elevation drawing viewed from directly in front.`;
@@ -297,7 +312,7 @@ FINAL CHECK: The canvas is PORTRAIT (taller than wide). Before generating, verif
 export async function generateJewellerySketch(prompt: string): Promise<string> {
   try {
     // Use Gemini 3 Pro Image Preview for best text rendering and multi-turn reasoning
-    const response = await getAI().models.generateContent({
+    const response = await withRetry(() => getAI().models.generateContent({
       model: "gemini-3-pro-image-preview",
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       config: {
@@ -306,14 +321,26 @@ export async function generateJewellerySketch(prompt: string): Promise<string> {
           aspectRatio: "3:4",
           imageSize: "1K",
         },
+        httpOptions: {
+          timeout: 180_000, // 3 minute timeout
+        },
       },
-    });
+    }));
 
     if (!response.candidates || response.candidates.length === 0) {
       throw new Error("No response from Gemini 3 Pro Image");
     }
 
     const candidate = response.candidates[0];
+
+    // Check if generation was blocked before checking for image data
+    const finishReason = (candidate as any).finishReason;
+    if (finishReason && finishReason !== "STOP" && finishReason !== "MAX_TOKENS") {
+      const blockReason = (response as any).promptFeedback?.blockReason;
+      const detail = blockReason ? `blocked: ${blockReason}` : `finish reason: ${finishReason}`;
+      throw new Error(`Gemini generation stopped — ${detail}`);
+    }
+
     if (!candidate.content || !candidate.content.parts) {
       throw new Error("No content in Gemini 3 Pro Image response");
     }
@@ -382,7 +409,7 @@ EDIT REQUEST: ${editPrompt}
 Apply the requested changes while maintaining the overall design aesthetic and style. Ensure the edited design remains COMPLETE with generous margins - no elements touching or exiting the frame.`;
 
     // Use Gemini 3 Pro Image Preview with the source image and edit instructions
-    const response = await getAI().models.generateContent({
+    const response = await withRetry(() => getAI().models.generateContent({
       model: "gemini-3-pro-image-preview",
       contents: [
         {
@@ -404,8 +431,11 @@ Apply the requested changes while maintaining the overall design aesthetic and s
           aspectRatio: "3:4",
           imageSize: "1K",
         },
+        httpOptions: {
+          timeout: 180_000, // 3 minute timeout
+        },
       },
-    });
+    }));
 
     const candidates = response.candidates;
     if (!candidates || candidates.length === 0) {
@@ -441,6 +471,7 @@ Apply the requested changes while maintaining the overall design aesthetic and s
 export async function modifyJewelleryImage(
   sourceImagePath: string,
   editPrompt: string,
+  precomputedStyle?: string,
 ): Promise<string> {
   try {
     const fullPath = path.isAbsolute(sourceImagePath)
@@ -456,8 +487,8 @@ export async function modifyJewelleryImage(
     const imageBuffer = fs.readFileSync(fullPath);
     const base64Image = imageBuffer.toString("base64");
 
-    // Step 1: Auto-detect the input's visual style via Gemini Vision
-    const styleDescription = await analyzeImageStyle(fullPath);
+    // Use pre-computed style if provided to avoid a redundant Gemini Vision call
+    const styleDescription = precomputedStyle ?? await analyzeImageStyle(fullPath);
 
     // Step 2: Build style-anchored modify prompt
     const fullPrompt = `You are editing an existing jewellery image.
@@ -502,6 +533,9 @@ Output must be visually indistinguishable in style from the original image.`;
         imageConfig: {
           aspectRatio: "3:4",
           imageSize: "1K",
+        },
+        httpOptions: {
+          timeout: 180_000, // 3 minute timeout
         },
       },
     });
@@ -565,6 +599,7 @@ export async function analyzeImageStyle(imagePath: string): Promise<string> {
           ],
         },
       ],
+      config: { httpOptions: { timeout: 30_000 } },
     });
 
     const candidates = response.candidates;
@@ -627,7 +662,7 @@ export async function generateMarketingVisualGemini(
   prompt: string
 ): Promise<string> {
   try {
-    const response = await getAI().models.generateContent({
+    const response = await withRetry(() => getAI().models.generateContent({
       model: "gemini-3-pro-image-preview",
       contents: [
         {
@@ -649,8 +684,11 @@ export async function generateMarketingVisualGemini(
           aspectRatio: "3:4",
           imageSize: "1K",
         },
+        httpOptions: {
+          timeout: 180_000, // 3 minute timeout
+        },
       },
-    });
+    }));
 
     if (!response.candidates || response.candidates.length === 0) {
       throw new Error("No response from Gemini marketing visual generation");
@@ -730,12 +768,30 @@ DIAMOND sieve options (round cut diamonds — small sparkling stones):
 - "1-1.5" (1.20mm)
 - "2-2.5" (1.30mm)
 
-COLOR STONE types (coloured gemstones):
-- "Synthetic" — generic coloured stones
+COLOR STONE types (coloured gemstones) — use ONLY these exact type names:
+- "Synthetic" — generic unidentified coloured stones
 - "Morganite" — pink/peach stones
-- "Emerald" — green stones
-- "Navratna" — mixed colour stones
-- "Ruby" — red stones
+- "Emerald" — standard green emeralds
+- "Emerald Russian" — Russian emeralds (deeper green)
+- "Emerald Colombian" — Colombian emeralds (vivid green, top quality)
+- "Navratna" — mixed nine-colour stone clusters
+- "Ruby" — red rubies
+- "Ruby Glass Filled" — glass-filled/composite rubies
+- "Sapphire" — blue/pink/yellow sapphires
+- "Aquamarine" — light blue/sea-green stones
+- "Tourmaline" — various coloured tourmalines
+- "Amethyst" — purple stones
+- "Turquoise" — turquoise/blue-green stones
+- "Tanzanite" — violet-blue tanzanite
+- "Spinel" — red/pink/blue spinel
+- "Opal" — iridescent stones
+- "Coral" — orange/red coral
+- "Pearl" — standard pearls
+- "Basra Pearl" — natural Basra pearls
+- "JKC Pearl" — Japanese cultured pearls
+- "South Sea Pearl" — large lustrous South Sea pearls
+- "Onyx" — black/dark stones
+- "Beryl" — green/yellow/blue beryl (non-emerald)
 
 EMERALD sizes (sized emeralds):
 - "3x2" — small
@@ -743,7 +799,21 @@ EMERALD sizes (sized emeralds):
 - "4x2" — medium
 - "4x3" — large
 
-GOLD WEIGHT: Estimate total gold weight in grams based on the visible gold framework, the category type, and the budget. A necklace set at ₹10 Lakh typically uses 30-60g of gold. Scale proportionally.
+GOLD WEIGHT: Estimate total gold weight in grams based on the visible gold framework, category type, and budget.
+GOLD WEIGHT REFERENCE BY BUDGET (use these for gold weight only):
+- ₹5 Lakh necklace: ~10–18g gold
+- ₹10 Lakh necklace set: ~30–50g gold
+- ₹25 Lakh necklace set: ~60–90g gold
+- ₹1 Cr necklace set: ~100–150g gold
+Scale gold weight proportionally to the budget provided above.
+
+POLKI STONE COUNTING (critical — count from the image, not from budget):
+- Examine the image carefully and count EVERY visible white/off-white uncut stone bubble
+- Do NOT use the budget to guess the count — look at what is actually drawn
+- Classify each stone into the sieve by its visible size relative to the gold framework
+- If a design shows 12 large polki and 30 small polki, return exactly that
+- Typical ranges by category for sanity-check only (do NOT anchor to these):
+  Ring: 5–25 polki | Earrings: 10–40 polki | Necklace: 25–120 polki | Long Necklace Set: 60–200 polki
 
 Return a JSON object with this exact structure:
 {
