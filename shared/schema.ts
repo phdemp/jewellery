@@ -39,7 +39,9 @@ export const referenceImages = pgTable("reference_images", {
   filename: text("filename").notNull(),
   filepath: text("filepath").notNull(),
   thumbnailPath: text("thumbnail_path"), // smaller image for grid display
-  themeCode: text("theme_code"), // folder/theme code like WRO, CLO, etc.
+  themeCode: text("theme_code"), // folder/theme code like WRO, CLO, etc. (legacy)
+  productSegment: text("product_segment"), // e.g. "Bridal", "Modern", "RTW"
+  category: text("category"),              // e.g. "Necklace Set", "Choker"
   uploadedAt: timestamp("uploaded_at").defaultNow().notNull(),
   metadata: jsonb("metadata"), // stores vision analysis results
   embedding: jsonb("embedding"), // legacy - stores embedding as JSON (for migration)

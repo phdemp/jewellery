@@ -30,12 +30,14 @@ export async function generateCADImageWithOpenAI(
     if (!b64) throw new Error("No image data in OpenAI response");
 
     const timestamp = Date.now();
-    const filename = `cad_${timestamp}.png`;
+    const rand = Math.random().toString(36).slice(2, 8);
+    const filename = `cad_${timestamp}_${rand}.png`;
     const filepath = path.join("uploads", filename);
     fs.writeFileSync(filepath, Buffer.from(b64, "base64"));
     return `/uploads/${filename}`;
-  } catch (error: any) {
-    throw new Error(`Failed to generate CAD image with OpenAI: ${error.message}`);
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to generate CAD image with OpenAI: ${msg}`);
   }
 }
 
@@ -61,8 +63,9 @@ export async function generateMarketingVisualOpenAI(
     if (!b64) throw new Error("No image data in OpenAI marketing visual response");
 
     return b64;
-  } catch (error: any) {
-    throw new Error(`OpenAI marketing visual failed: ${error.message}`);
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
+    throw new Error(`OpenAI marketing visual failed: ${msg}`);
   }
 }
 
@@ -88,11 +91,13 @@ export async function modifyImageWithOpenAI(
     if (!b64) throw new Error("No image data in OpenAI response");
 
     const timestamp = Date.now();
-    const filename = `modified_${timestamp}.png`;
+    const rand = Math.random().toString(36).slice(2, 8);
+    const filename = `modified_${timestamp}_${rand}.png`;
     const filepath = path.join("uploads", filename);
     fs.writeFileSync(filepath, Buffer.from(b64, "base64"));
     return `/uploads/${filename}`;
-  } catch (error: any) {
-    throw new Error(`Failed to modify image with OpenAI: ${error.message}`);
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to modify image with OpenAI: ${msg}`);
   }
 }

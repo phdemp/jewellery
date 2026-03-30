@@ -27,7 +27,7 @@ export function CostReport({ report }: CostReportProps) {
         <SummaryCard label="Stone Cost" value={inr(report.totalStoneCost)} className="bg-teal-50 border-teal-200" />
         <SummaryCard label="Total Estimated" value={inr(report.totalEstimatedCost)} className="bg-slate-50 border-slate-200" />
         <SummaryCard
-          label="Budget Variance"
+          label="After Making Charges"
           value={`${report.budgetVariance >= 0 ? "+" : ""}${inr(report.budgetVariance)}`}
           subtext={report.budgetVariance >= 0 ? "over budget" : "under budget"}
           className={report.budgetVariance >= 0 ? "bg-red-50 border-red-200" : "bg-green-50 border-green-200"}
@@ -42,8 +42,9 @@ export function CostReport({ report }: CostReportProps) {
           <p>Purity:           {report.gold.purity} ({(report.gold.purityFraction * 100).toFixed(1)}% pure)</p>
           <p>Today's Rate:     {inr(report.gold.ratePerGram)}/gram (24k)</p>
           <p>Effective Rate:   {inr(report.gold.effectiveRatePerGram)}/gram ({report.gold.purity})</p>
-          <p>Estimated Weight: {report.gold.estimatedWeight.toFixed(3)}g</p>
+          <p>Estimated Weight: {report.gold.estimatedWeight.toFixed(1)}g</p>
           <p>Gold Cost:        {inr(report.gold.totalCost)}</p>
+          <p>Making Charges:   {inr(report.makingCharges)} (@ ₹1,200/g × {report.gold.estimatedWeight.toFixed(1)}g)</p>
         </div>
       </div>
 
@@ -181,6 +182,10 @@ export function CostReport({ report }: CostReportProps) {
         <div className="flex justify-between">
           <span>Gold Cost:</span>
           <span className="font-medium">{inr(report.gold.totalCost)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span>Making Charges (₹1,200/g):</span>
+          <span className="font-medium">{inr(report.makingCharges)}</span>
         </div>
         <div className="border-t border-border/40 pt-2 mt-2 flex justify-between text-base font-bold">
           <span>TOTAL ESTIMATED COST:</span>

@@ -347,7 +347,7 @@ export default function MarketingPage() {
                 )}
               </Button>
               <p className="text-xs text-muted-foreground text-center mt-2">
-                Both Gemini and OpenAI will generate simultaneously. This takes 20-40 seconds.
+                All three AI models will generate simultaneously. This takes 20-40 seconds.
               </p>
             </div>
           </form>
@@ -376,25 +376,29 @@ export default function MarketingPage() {
                 Upload a jewellery image and select your styling preferences to generate a luxury marketing visual.
               </p>
               <p className="text-sm text-muted-foreground">
-                Two AI interpretations will appear here, side by side.
+                Three AI interpretations will appear here, side by side.
               </p>
             </motion.div>
           )}
 
           {/* Loading state */}
           {isLoading && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {["Gemini", "OpenAI"].map((model) => (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {[
+                { name: "Gemini", color: "bg-blue-100 text-blue-700" },
+                { name: "OpenAI", color: "bg-green-100 text-green-700" },
+                { name: "Grok", color: "bg-orange-100 text-orange-700" },
+              ].map(({ name, color }) => (
                 <div
-                  key={model}
+                  key={name}
                   className="bg-white border border-border/60 rounded-xl overflow-hidden"
                 >
                   <div className="p-3 border-b border-border/40">
                     <Badge
                       variant="secondary"
-                      className={model === "Gemini" ? "bg-blue-100 text-blue-700" : "bg-green-100 text-green-700"}
+                      className={color}
                     >
-                      {model}
+                      {name}
                     </Badge>
                   </div>
                   <Skeleton className="w-full aspect-[3/4]" />
@@ -414,7 +418,7 @@ export default function MarketingPage() {
               animate={{ opacity: 1, y: 0 }}
               className="space-y-4"
             >
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {/* Gemini result */}
                 <ResultCard
                   model="Gemini"
@@ -434,6 +438,17 @@ export default function MarketingPage() {
                   error={result.openai.error}
                   onDownload={() =>
                     result.openai.imageUrl && downloadImage(result.openai.imageUrl, "openai")
+                  }
+                />
+
+                {/* Grok result */}
+                <ResultCard
+                  model="Grok"
+                  badgeClass="bg-orange-100 text-orange-700"
+                  imageUrl={result.grok.imageUrl}
+                  error={result.grok.error}
+                  onDownload={() =>
+                    result.grok.imageUrl && downloadImage(result.grok.imageUrl, "grok")
                   }
                 />
               </div>

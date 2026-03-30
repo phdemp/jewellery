@@ -9,9 +9,11 @@ import path from "path";
 import fs from "fs/promises";
 import sharp from "sharp";
 import { modifyImageWithOpenAI, generateCADImageWithOpenAI, generateMarketingVisualOpenAI } from "./openai-client";
+import { generateImageWithGrok, modifyImageWithGrok, generateMarketingVisualGrok, type GrokAspectRatio } from "./grok-client";
 import {
   analyzeReferenceImage,
   analyzeDesignMaterials,
+  analyzeImageStyle,
   generateTextEmbedding,
   generateImageEmbedding,
   generateJewellerySketch,
@@ -20,6 +22,7 @@ import {
   buildDesignContext,
   buildImagePrompt,
   type DesignContext,
+  type MaterialBreakdown,
   buildMarketingPrompt,
   generateMarketingVisualGemini,
 } from "./google-client";
@@ -69,6 +72,102 @@ const memoryUpload = multer({
   }
 });
 
+// ── Design Image Bulk Import ──────────────────────────────────────────────────
+
+// Maps top-level folder names to standard product segment names
+const DESIGN_IMAGE_SEGMENT_MAP: Record<string, string> = {
+  'Bridal':           'Bridal',
+  'Bridal-Lite':      'Bridal Lite',
+  'Traditional':      'Traditional',
+  'Modern':           'Modern',
+  'RTW':              'RTW',
+  'Ear Esssentials':  'Ear Essentials',  // note the 3-s typo in folder name
+  'Handwear':         'Handwear',
+};
+
+// Parse theme code from filename: FQBRP04499CHS.JPG → "BRP"
+function parseThemeCodeFromFilename(filename: string): string | null {
+  const match = filename.match(/^[A-Z]Q?(BRC|BRP|BRU|CLO|CLP|WRD|WRO|SOD|SOO|SOP|SOL)/i);
+  if (!match) return null;
+  const code = match[1].toUpperCase();
+  const codeMap: Record<string, string> = { 'CLP': 'CLO', 'SOL': 'SOO' };
+  return codeMap[code] ?? code;
+}
+
+interface DesignImageFile {
+  sourcePath:     string;
+  filename:       string;
+  productSegment: string;
+  category:       string;
+  themeCode:      string | null;
+}
+
+// In-memory state for background import job
+let designImportJob = {
+  running:   false,
+  total:     0,
+  processed: 0,
+  failed:    0,
+  skipped:   0,
+  errors:    [] as string[],
+};
+
+async function runDesignImageImport(files: DesignImageFile[]): Promise<void> {
+  const BATCH = 3;
+
+  for (let i = 0; i < files.length; i += BATCH) {
+    const batch = files.slice(i, i + BATCH);
+
+    await Promise.allSettled(batch.map(async (file) => {
+      try {
+        const buf    = await fs.readFile(file.sourcePath);
+        const base64 = buf.toString('base64');
+
+        const destName = `${Date.now()}-${file.filename}`;
+        const destPath = path.join('uploads', destName);
+        await fs.copyFile(file.sourcePath, destPath);
+
+        const thumbPath = path.join('uploads', `thumb_${destName}`);
+        await sharp(buf).resize(300, 300, { fit: 'cover', position: 'center' })
+          .jpeg({ quality: 80 }).toFile(thumbPath);
+
+        const analysis  = await analyzeReferenceImage(base64);
+        const embedding = await generateImageEmbedding(base64);
+
+        const richMetadata = {
+          ...analysis,
+          productSegment: file.productSegment,
+          category:       file.category,
+          themeCode:      file.themeCode,
+        };
+
+        const ref = await storage.createReferenceImage({
+          filename:       file.filename,
+          filepath:       destPath,
+          thumbnailPath:  thumbPath,
+          themeCode:      file.themeCode ?? undefined,
+          productSegment: file.productSegment || null,
+          category:       file.category || null,
+          metadata:       richMetadata,
+          embedding:      embedding as any,
+        });
+
+        await addVector(ref.id, embedding, richMetadata);
+
+        designImportJob.processed++;
+      } catch (err: unknown) {
+        designImportJob.failed++;
+        const msg = err instanceof Error ? err.message : String(err);
+        designImportJob.errors.push(`${file.filename}: ${msg}`);
+      }
+    }));
+  }
+
+  designImportJob.running = false;
+}
+
+// ── End Design Image Bulk Import ──────────────────────────────────────────────
+
 // Portrait-oriented jewellery categories for CAD image size selection
 const PORTRAIT_CATEGORIES = [
   "Necklace", "Choker", "Long Necklace Set", "Kantha",
@@ -85,6 +184,23 @@ const PRICE_BAND_BUDGET: Record<string, { min: number; max: number }> = {
   "15-25 Lakh":     { min: 1500000, max: 2500000 },
   "25-50 Lakh":     { min: 2500000, max: 5000000 },
   "50 Lakh - 1Cr":  { min: 5000000, max: 10000000 },
+};
+
+// Price band → design complexity guidance for image generation
+const PRICE_BAND_DESIGN_GUIDANCE: Record<string, string> = {
+  "0-5 Lakh":      "BUDGET TIER ₹0–5 Lakh (ENTRY): LIGHTWEIGHT, SIMPLE piece. Minimal stone coverage. Thin gold framework. Clean, uncluttered silhouette. No heavy layering.",
+  "5-10 Lakh":     "BUDGET TIER ₹5–10 Lakh (MID): Moderate stone coverage. Medium-weight gold framework. Straightforward structural layout.",
+  "10-15 Lakh":    "BUDGET TIER ₹10–15 Lakh (UPPER-MID): Well-filled stone coverage. Moderately intricate gold detailing.",
+  "15-25 Lakh":    "BUDGET TIER ₹15–25 Lakh (PREMIUM): Dense stone coverage. Detailed gold framework with layering. Rich overall composition.",
+  "25-50 Lakh":    "BUDGET TIER ₹25–50 Lakh (LUXURY): Heavy, elaborate piece. Complex layered gold structure. Maximum stone surface coverage.",
+  "50 Lakh - 1Cr": "BUDGET TIER ₹50 Lakh–1 Cr (GRAND): Maximum opulence. Elaborate multi-tier structure. Near-continuous stone surface coverage.",
+};
+
+const POLKI_SIZE_DESCRIPTIONS: Record<string, string> = {
+  "Far":    "FAR SIZE (1.5+ Sieve) — MASSIVE STATEMENT POLKI. Each stone is so large that only 12–20 total stones fill the entire jewellery surface. Each individual polki must be approximately 1/5 to 1/6 the width of the full piece. Stones pack edge-to-edge with almost no visible gold between them. The polki dominate 85%+ of the visual surface. NO small accent polki anywhere — every stone is a bold, oversized feature stone.",
+  "Big":    "BIG SIZE (60 to 1.5 Sieve) — LARGE polki stones. 25–40 total stones cover the piece. Each stone is approximately 1/8 to 1/10 the piece width. Stones are clearly oversized and prominent feature elements — not tiny accents.",
+  "Medium": "MEDIUM SIZE (28 to 60 Sieve) — standard polki stones, 2–4 mm each. Regular mid-range size filling the design evenly.",
+  "Small":  "SMALL SIZE (under 28 Sieve) — tiny polki accent chips, 1–2 mm each. Used as fine fill or accent only, not as feature stones.",
 };
 
 const BRAND_RULES = `You are an Expert Jewellery Designer AI specialising in hand-sketched concept art for Polki, Bridal and Contemporary luxury jewellery.
@@ -133,20 +249,24 @@ MOTIF CATEGORIES:
 FUSION REQUIREMENT: BRU/BRP categories require fusion of 2+ motifs
 
 STONE PREFERENCES:
-Emerald, Ruby, Sapphire, Pink Tourmaline, Navratna, Amethyst, Polki-intensive layouts
+Use ONLY the stones explicitly listed in the design specifications below. Do NOT add rubies, emeralds, sapphires, or any other colored stones unless they are explicitly requested. Default to pure Polki when no colored stones are specified.
 
 GOLD-TO-STONE RATIO:
-Use 50-55% gold for high-value sets
+Determined entirely by the Polki Size and Material Ratio specified in the design request. Do NOT apply any default gold percentage — follow the polki size constraint exactly.
 
 DESIGN RULES:
 1. CLO RULE: No animals or birds in CLO designs - use abstract interpretations only
 2. Indian heritage proportions must be maintained
 3. Clean outlines with accurate stone placements
 4. Realistic gold structure with balanced layout based on category
-5. Layered long necklaces with scallops + lotus + emerald drops
+5. Layered long necklaces with scallops + lotus motifs, stone drops only if explicitly requested
 6. Big-look rings with central Polki + geometric frame
 7. Chokers with paisley + peacock motifs fusing seamlessly
 8. Modern scallop-based Polki layouts with Jaali interiors`;
+
+// Condensed preamble for Grok — replaces full BRAND_RULES to stay under Grok's 8000-char prompt limit.
+// The imagePrompt already contains all design-specific rules; Grok only needs the style essentials.
+const GROK_SKETCH_PREAMBLE = `Hand-drawn jewellery design sketch for a luxury Indian jewellery brand. Flat front-view only — no 3D, no perspective, no tilted angle. White background. Fine pencil linework in soft brown/gold tones. Polki stones as irregular white/off-white uncut diamonds set in gold kundan bezels. Colored gemstones as soft watercolor pastel fills. No text, no labels, no watermarks, no signatures.`;
 
 const CAD_RULES = `You are generating a PHOTOREALISTIC JEWELRY CAD RENDER for Raniwala 1881.
 
@@ -187,6 +307,39 @@ function buildCADPrompt(context: DesignContext): string {
   return `${CAD_RULES}\n\nDESIGN SPECIFICATIONS:\n${parts.join("\n")}`;
 }
 
+/** Extract first successful URL from allSettled results, in priority order. */
+function firstSuccessfulUrl(results: PromiseSettledResult<string>[]): string | null {
+  for (const r of results) {
+    if (r.status === "fulfilled") return r.value;
+  }
+  return null;
+}
+
+/** Convert a PromiseSettledResult into a ModelResult. Logs full error server-side and surfaces actual error message to client. */
+function toModelResult(result: PromiseSettledResult<string>, model: string): { imageUrl: string | null; error: string | null; model: string } {
+  if (result.status === "fulfilled") {
+    return { imageUrl: result.value, error: null, model };
+  }
+  const err = result.reason as Error;
+  console.error(`[${model}] generation failed:`, err);
+  return { imageUrl: null, error: err?.message || `${model} generation failed`, model };
+}
+
+/** Validate polki sieve strings and log counts for debugging. */
+function validateBreakdown(breakdown: MaterialBreakdown, category: string): MaterialBreakdown {
+  const validSieves = new Set(["8-10", "10-12", "12-14", "14-16"]);
+  const validPolki = breakdown.polki.filter(p => {
+    if (!validSieves.has(p.sieve)) {
+      console.warn(`[costing] Dropping unknown polki sieve "${p.sieve}" — not in STONE_DATA`);
+      return false;
+    }
+    return true;
+  });
+  const totalPolki = validPolki.reduce((s, p) => s + p.count, 0);
+  console.log(`[costing] Polki count for ${category}: ${totalPolki} stones across ${validPolki.length} sieve(s)`);
+  return { ...breakdown, polki: validPolki };
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -199,7 +352,9 @@ export async function registerRoutes(
         return res.status(400).json({ error: "No image file uploaded" });
       }
 
-      const themeCode = req.body.themeCode || null;
+      const themeCode      = req.body.themeCode      || null;
+      const productSegment = req.body.productSegment  || null;
+      const category       = req.body.category        || null;
 
       // Read the uploaded file as base64
       const fileBuffer = await fs.readFile(req.file.path);
@@ -225,12 +380,14 @@ export async function registerRoutes(
         filepath: req.file.path,
         thumbnailPath: thumbnailPath,
         themeCode,
+        productSegment,
+        category,
         metadata: analysis,
         embedding: embedding as any,
       });
 
-      // Add to vector store for similarity search (include themeCode in metadata)
-      await addVector(referenceImage.id, embedding, { ...analysis, themeCode });
+      // Add to vector store for similarity search
+      await addVector(referenceImage.id, embedding, { ...analysis, themeCode, productSegment, category });
 
       res.json({
         id: referenceImage.id,
@@ -238,6 +395,8 @@ export async function registerRoutes(
         filepath: referenceImage.filepath,
         thumbnailPath: referenceImage.thumbnailPath,
         themeCode: referenceImage.themeCode,
+        productSegment: referenceImage.productSegment,
+        category: referenceImage.category,
         imageUrl: `/${referenceImage.filepath}`,
         thumbnailUrl: `/${referenceImage.thumbnailPath}`,
         analysis
@@ -305,23 +464,39 @@ export async function registerRoutes(
       const category = req.body.category;
       const productSegment = req.body.productSegment || "";
       const priceBand = req.body.priceBand || "";
-      const polkiSize = req.body.polkiSize || "";
-      const motifCategory = req.body.motifCategory || "";
+      let polkiSizes: string[] = [];
+      try {
+        polkiSizes = req.body.polkiSize ? (typeof req.body.polkiSize === "string" ? JSON.parse(req.body.polkiSize) : req.body.polkiSize) : [];
+      } catch { polkiSizes = []; }
+      let techniques: string[] = [];
+      try {
+        techniques = req.body.techniques ? (typeof req.body.techniques === "string" ? JSON.parse(req.body.techniques) : req.body.techniques) : [];
+      } catch { techniques = []; }
+      let motifCategories: string[] = [];
+      try {
+        const mc = req.body.motifCategory;
+        if (mc) { try { motifCategories = JSON.parse(mc); } catch { motifCategories = [mc]; } }
+      } catch { motifCategories = []; }
       let motifs: string[] = [];
       try {
         motifs = req.body.motifs ? JSON.parse(req.body.motifs) : [];
       } catch {
         motifs = [];
       }
-      let stoneColour: string[] = [];
-      try {
-        stoneColour = req.body.stoneColour ? JSON.parse(req.body.stoneColour) : [];
-      } catch {
-        stoneColour = [];
-      }
+      let stoneName: string[] = [];
+      try { stoneName = req.body.stoneName ? JSON.parse(req.body.stoneName) : []; } catch { stoneName = []; }
+      let stoneNameColour: string[] = [];
+      try { stoneNameColour = req.body.stoneNameColour ? JSON.parse(req.body.stoneNameColour) : []; } catch { stoneNameColour = []; }
+      const stoneShape = req.body.stoneShape || "";
+      const goldRatePerGram = Number(req.body.goldRatePerGram) || 0;
+      const goldPurityRaw = req.body.goldPurity as string;
+      const goldPurity: GoldPurity = (goldPurityRaw && goldPurityRaw in GOLD_PURITY) ? goldPurityRaw as GoldPurity : "18k";
+      const goldPercentage = Math.max(5, Math.min(95, parseInt(req.body.goldPercentage as string, 10) || 40));
       const enamel = req.body.enamel || "";
       const finish = req.body.finish || "";
       const designShape = req.body.designShape || "";
+      const designType: string = req.body.designType || "";
+      const earringStyle = req.body.earringStyle || "";
       const materialRatio = req.body.materialRatio || "Gold Intensive";
       const talaf = req.body.talaf || "";
       const piroiPlacement = req.body.piroiPlacement || "";
@@ -330,12 +505,12 @@ export async function registerRoutes(
       const styleOverrideFile = req.file;
       const mode = (req.body.mode as string) === "cad" ? "cad" : "sketch";
 
-      // Map new fields to DB schema (theme = productSegment, stones = stoneColour)
+      // Map new fields to DB schema (theme = productSegment, stones = stoneName)
       const validatedData = designProjectInputSchema.parse({
         category,
         theme: productSegment || "Modern",
         motifs,
-        stones: stoneColour,
+        stones: stoneName,
         materialRatio,
         customNotes
       });
@@ -355,14 +530,28 @@ export async function registerRoutes(
         similarDesigns = similarResults.map(result => result.metadata);
       }
 
-      // Build extra specs string from extended fields (same approach as CAD comparison endpoint)
+      // Build extra specs string from extended fields
       const extraSpecs: string[] = [];
-      if (priceBand) extraSpecs.push(`Price Band: ${priceBand}`);
-      if (polkiSize) extraSpecs.push(`Polki Size: ${polkiSize}`);
-      if (motifCategory) extraSpecs.push(`Motif Category: ${motifCategory}`);
+      if (priceBand) {
+        const bandGuidance = PRICE_BAND_DESIGN_GUIDANCE[priceBand];
+        extraSpecs.push(`Price Band: ${priceBand}${bandGuidance ? `\n${bandGuidance}` : ""}`);
+      }
+      const polkiSetting: string = req.body.polkiSetting || "";
+      if (polkiSetting) extraSpecs.push(`Polki Setting Style: ${polkiSetting}`);
+      if (motifCategories.length > 0) extraSpecs.push(`Motif Category: ${motifCategories.join(", ")}`);
+      if (stoneName.length > 0) extraSpecs.push(`Stone Names: ${stoneName.join(", ")}`);
+      if (stoneNameColour.length > 0) extraSpecs.push(`Stone Colours: ${stoneNameColour.join(", ")}`);
+      if (stoneShape) extraSpecs.push(`Stone Shape: ${stoneShape}`);
+      const stoneSetting: string = req.body.stoneSetting || "";
+      if (stoneSetting) extraSpecs.push(`Stone Setting: ${stoneSetting}`);
+      const diamondSetting: string = req.body.diamondSetting || "";
+      if (diamondSetting) extraSpecs.push(`Diamond Setting: ${diamondSetting}`);
       if (enamel) extraSpecs.push(`Enamel: ${enamel}`);
       if (finish) extraSpecs.push(`Finish: ${finish}`);
       if (designShape) extraSpecs.push(`Design Shape: ${designShape}`);
+      if (designType) extraSpecs.push(`Design Type: ${designType}`);
+      if (techniques.length > 0) extraSpecs.push(`Techniques: ${techniques.join(", ")}`);
+      if (earringStyle) extraSpecs.push(`Earring Style: ${earringStyle}`);
       if (talaf && talaf !== "None") extraSpecs.push(`Talaf: ${talaf}`);
       if (piroiPlacement && piroiPlacement !== "None") extraSpecs.push(`Piroi Placement: ${piroiPlacement}`);
       if (piroiColour && piroiColour !== "None") extraSpecs.push(`Piroi Colour: ${piroiColour}`);
@@ -373,7 +562,7 @@ export async function registerRoutes(
         category: validatedData.category,
         theme: productSegment || "Modern",
         motifs: validatedData.motifs,
-        stones: stoneColour,
+        stones: stoneName,
         materialRatio: validatedData.materialRatio,
         customNotes: validatedData.customNotes ?? undefined,
         similarDesigns: styleOverrideAnalysis ? [styleOverrideAnalysis] : similarDesigns
@@ -395,8 +584,11 @@ export async function registerRoutes(
       }
       sketchPlan += `\n**Motifs & Elements:**\n`;
       sketchPlan += `- Integrate the following motifs: ${motifs.join(', ') || 'None specified'}.\n`;
-      if (stoneColour.length > 0) {
-        sketchPlan += `- Stone colours: ${stoneColour.join(', ')}.\n`;
+      if (stoneName.length > 0) {
+        sketchPlan += `- Stones: ${stoneName.join(', ')}.\n`;
+      }
+      if (stoneNameColour.length > 0) {
+        sketchPlan += `- Stone colours: ${stoneNameColour.join(', ')}.\n`;
       }
 
       if (styleOverrideAnalysis) {
@@ -409,22 +601,64 @@ export async function registerRoutes(
       // Generate condensed image prompt for Gemini (under 4000 chars)
       const imagePrompt = buildImagePrompt(context) + extraSpecsStr;
 
-      // Generate the actual image — Gemini for sketch, OpenAI for CAD render (Gemini fallback)
-      let generatedImageUrl: string;
-      if (mode === "cad") {
-        const cadPrompt = buildCADPrompt(context) + extraSpecsStr;
-        const isPortrait = PORTRAIT_CATEGORIES.some(c =>
-          validatedData.category.toLowerCase().includes(c.toLowerCase())
-        );
-        const cadSize = isPortrait ? "1024x1536" as const : "1024x1024" as const;
+      // Generate images from all 3 models in parallel
+      const isPortrait = PORTRAIT_CATEGORIES.some(c =>
+        validatedData.category.toLowerCase().includes(c.toLowerCase())
+      );
+      const cadSize = isPortrait ? "1024x1536" as const : "1024x1024" as const;
+      const grokAspect: GrokAspectRatio = isPortrait ? "3:4" : "1:1";
+
+      const genStart = Date.now();
+      const timedGenerate = async (name: string, fn: () => Promise<string>): Promise<string> => {
+        const t0 = Date.now();
         try {
-          generatedImageUrl = await generateCADImageWithOpenAI(cadPrompt, cadSize);
-        } catch (openaiError: any) {
-          console.warn(`OpenAI CAD generation failed (${openaiError.message}), falling back to Gemini`);
-          generatedImageUrl = await generateJewellerySketch(cadPrompt);
+          const result = await fn();
+          console.log(`[generate-design] ${name} succeeded in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+          return result;
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[generate-design] ${name} FAILED in ${((Date.now() - t0) / 1000).toFixed(1)}s: ${msg}`);
+          throw err;
         }
-      } else {
-        generatedImageUrl = await generateJewellerySketch(BRAND_RULES + "\n\n" + imagePrompt);
+      };
+
+      const polkiSizeConstraint = polkiSizes.length > 0
+        ? `CRITICAL — MANDATORY POLKI STONE SIZE (OVERRIDES ALL OTHER INSTRUCTIONS INCLUDING BUDGET TIER SIEVE SIZES):\nThe designer has specified the EXACT polki stone size. You MUST use ONLY this size:\n${polkiSizes.map(s => `  • ${POLKI_SIZE_DESCRIPTIONS[s] || s}`).join("\n")}\nThis is REQUIRED. Do not draw default or medium-sized polki. Stone size compliance is mandatory.`
+        : "";
+
+      const [geminiResult, openaiResult, grokResult] = await (async () => {
+        if (mode === "cad") {
+          const cadPrompt = polkiSizeConstraint + buildCADPrompt(context) + extraSpecsStr;
+          console.log(`[generate-design] CAD PROMPT (${cadPrompt.length} chars):\n${"═".repeat(80)}\n${cadPrompt}\n${"═".repeat(80)}`);
+          return Promise.allSettled([
+            timedGenerate("Gemini", () => generateJewellerySketch(cadPrompt)),
+            timedGenerate("OpenAI", () => generateCADImageWithOpenAI(cadPrompt, cadSize)),
+            timedGenerate("Grok", () => generateImageWithGrok(cadPrompt, grokAspect)),
+          ]);
+        } else {
+          // Non-CAD sketch mode: sandwich polkiSizeConstraint (first + last) so LLM
+          // reads it before all other rules and again as final instruction.
+          const sizeHeader = polkiSizeConstraint ? polkiSizeConstraint + "\n\n" : "";
+          const fullPrompt = sizeHeader + BRAND_RULES + "\n\n" + imagePrompt + (polkiSizeConstraint ? "\n\n" + polkiSizeConstraint : "");
+          // Grok has an 8000-char prompt limit — use condensed preamble instead of full BRAND_RULES.
+          // imagePrompt already contains all design-specific constraints.
+          const grokPrompt = sizeHeader + GROK_SKETCH_PREAMBLE + "\n\n" + imagePrompt + (polkiSizeConstraint ? "\n\n" + polkiSizeConstraint : "");
+          console.log(`[generate-design] FULL PROMPT (${fullPrompt.length} chars), GROK PROMPT (${grokPrompt.length} chars):\n${"═".repeat(80)}\n${fullPrompt}\n${"═".repeat(80)}`);
+          return Promise.allSettled([
+            timedGenerate("Gemini", () => generateJewellerySketch(fullPrompt)),
+            timedGenerate("OpenAI", () => generateCADImageWithOpenAI(fullPrompt, cadSize)),
+            timedGenerate("Grok", () => generateImageWithGrok(grokPrompt, grokAspect)),
+          ]);
+        }
+      })();
+      console.log(`[generate-design] All models settled in ${((Date.now() - genStart) / 1000).toFixed(1)}s`);
+
+      const generatedImageUrl = firstSuccessfulUrl([geminiResult, openaiResult, grokResult]);
+      if (!generatedImageUrl) {
+        const errors = [geminiResult, openaiResult, grokResult]
+          .filter((r): r is PromiseRejectedResult => r.status === "rejected")
+          .map(r => r.reason?.message).join("; ");
+        return res.status(500).json({ error: `All models failed: ${errors}` });
       }
 
       // Save to database
@@ -435,12 +669,48 @@ export async function registerRoutes(
         generatedImageUrl,
       });
 
+      // ── AI Costing (only when price band + gold rate provided) ──
+      let costReport: CostingReport | null = null;
+      const budgetRange = priceBand ? PRICE_BAND_BUDGET[priceBand] : undefined;
+      if (budgetRange && goldRatePerGram > 0) {
+        try {
+          const genPath = generatedImageUrl.startsWith("/")
+            ? path.join(".", generatedImageUrl)
+            : generatedImageUrl;
+          const imageBase64 = (await fs.readFile(genPath)).toString("base64");
+          const breakdown = await analyzeDesignMaterials(imageBase64, {
+            category,
+            budget: budgetRange.max,
+            materialRatio,
+            stones: stoneName,
+          });
+          const validated = validateBreakdown(breakdown, category);
+          costReport = generateCostingReport({
+            totalBudget: budgetRange.max,
+            goldPercentage,
+            goldRatePerGram,
+            goldPurity,
+            goldWeightGrams: validated.estimatedGoldWeightGrams,
+            polki: validated.polki.map(p => ({ sieve: p.sieve, count: p.count })),
+            diamond: validated.diamond.map(d => ({ sieve: d.sieve, count: d.count })),
+            colorStones: validated.colorStones.map(c => ({ type: c.type, carats: c.carats })),
+            emeralds: validated.emeralds.map(e => ({ size_mm: e.size_mm, count: e.count })),
+          });
+        } catch (costError: any) {
+          console.warn(`[generate-design] costing failed: ${costError.message}`);
+        }
+      }
+
       res.json({
         id: designProject.id,
         sketchPlan,
         imagePrompt,
         generatedImageUrl,
-        usedReferences: styleOverrideAnalysis ? 1 : similarDesigns.length
+        usedReferences: styleOverrideAnalysis ? 1 : similarDesigns.length,
+        costReport,
+        gemini: toModelResult(geminiResult, "gemini-3-pro-image-preview"),
+        openai: toModelResult(openaiResult, "gpt-image-1"),
+        grok: toModelResult(grokResult, "grok-imagine-image"),
       });
     } catch (error: any) {
       console.error("Error generating design:", error);
@@ -933,8 +1203,10 @@ export async function registerRoutes(
       // Parse array fields
       let motifs: string[] = [];
       try { motifs = req.body.motifs ? JSON.parse(req.body.motifs) : []; } catch { motifs = []; }
-      let stoneColour: string[] = [];
-      try { stoneColour = req.body.stoneColour ? JSON.parse(req.body.stoneColour) : []; } catch { stoneColour = []; }
+      let stoneName: string[] = [];
+      try { stoneName = req.body.stoneName ? JSON.parse(req.body.stoneName) : []; } catch { stoneName = []; }
+      let stoneNameColour: string[] = [];
+      try { stoneNameColour = req.body.stoneNameColour ? JSON.parse(req.body.stoneNameColour) : []; } catch { stoneNameColour = []; }
 
       // Parse gold rate and purity for costing
       const goldRatePerGram = Number(req.body.goldRatePerGram) || 0;
@@ -943,36 +1215,86 @@ export async function registerRoutes(
         ? goldPurityRaw as GoldPurity : "18k";
 
       // Build edit prompt — only include non-empty fields
+      const modifyPolkiSizes: string[] = req.body.polkiSize ? (typeof req.body.polkiSize === "string" ? (() => { try { return JSON.parse(req.body.polkiSize); } catch { return []; } })() : req.body.polkiSize) : [];
+      const modifyPolkiConstraint = modifyPolkiSizes.length > 0
+        ? `CRITICAL — MANDATORY POLKI STONE SIZE (OVERRIDES ALL OTHER INSTRUCTIONS INCLUDING BUDGET TIER SIEVE SIZES):\nYou MUST use ONLY this polki stone size throughout the modified design:\n${modifyPolkiSizes.map(s => `  • ${POLKI_SIZE_DESCRIPTIONS[s] || s}`).join("\n")}`
+        : "";
+
       const lines: string[] = ["Modify this jewellery design according to the following specifications:\n"];
       if (req.body.productSegment) lines.push(`Product Segment: ${req.body.productSegment}`);
       if (req.body.category) lines.push(`Category: ${req.body.category}`);
-      if (req.body.priceBand) lines.push(`Price Band: ${req.body.priceBand}`);
-      if (req.body.polkiSize) lines.push(`Polki Size: ${req.body.polkiSize}`);
+      if (req.body.priceBand) {
+        const modifyBandGuidance = PRICE_BAND_DESIGN_GUIDANCE[req.body.priceBand as string];
+        lines.push(`Price Band: ${req.body.priceBand}${modifyBandGuidance ? `\n${modifyBandGuidance}` : ""}`);
+      }
+      const modifyTechniques: string[] = req.body.techniques ? (typeof req.body.techniques === "string" ? (() => { try { return JSON.parse(req.body.techniques); } catch { return []; } })() : req.body.techniques) : [];
+      if (req.body.polkiSetting) lines.push(`Polki Setting Style: ${req.body.polkiSetting}`);
       if (req.body.motifCategory) lines.push(`Motif Category: ${req.body.motifCategory}`);
       if (motifs.length > 0) lines.push(`Motifs: ${motifs.join(", ")}`);
-      if (stoneColour.length > 0) lines.push(`Stone Colours: ${stoneColour.join(", ")}`);
+      if (stoneName.length > 0) lines.push(`Stone Names: ${stoneName.join(", ")}`);
+      if (stoneNameColour.length > 0) lines.push(`Stone Name Colours: ${stoneNameColour.join(", ")}`);
+      if (req.body.stoneShape) lines.push(`Stone Shape: ${req.body.stoneShape}`);
+      if (req.body.stoneSetting) lines.push(`Stone Setting: ${req.body.stoneSetting}`);
+      if (req.body.diamondSetting) lines.push(`Diamond Setting: ${req.body.diamondSetting}`);
       if (req.body.enamel) lines.push(`Enamel: ${req.body.enamel}`);
       if (req.body.finish) lines.push(`Finish: ${req.body.finish}`);
       if (req.body.designShape) lines.push(`Design Shape: ${req.body.designShape}`);
+      if (req.body.designType) lines.push(`Design Type: ${req.body.designType}`);
+      if (modifyTechniques.length > 0) lines.push(`Techniques: ${modifyTechniques.join(", ")}`);
+      if (req.body.earringStyle) lines.push(`Earring Style: ${req.body.earringStyle}`);
       if (req.body.materialRatio) lines.push(`Material Ratio: ${req.body.materialRatio}`);
       if (req.body.talaf && req.body.talaf !== "None") lines.push(`Talaf: ${req.body.talaf}`);
       if (req.body.piroiPlacement && req.body.piroiPlacement !== "None") lines.push(`Piroi Placement: ${req.body.piroiPlacement}`);
       if (req.body.piroiColour && req.body.piroiColour !== "None") lines.push(`Piroi Colour: ${req.body.piroiColour}`);
       if (req.body.customNotes) lines.push(`\nAdditional Instructions: ${req.body.customNotes}`);
 
-      const editPrompt = lines.join("\n");
+      const editPrompt = lines.join("\n") + (modifyPolkiConstraint ? "\n\n" + modifyPolkiConstraint : "");
+      const resolvedPath = path.resolve(inputPath);
 
-      // Modify the image — OpenAI preferred, Gemini fallback
-      let generatedImageUrl: string;
-      try {
-        try {
-          generatedImageUrl = await modifyImageWithOpenAI(path.resolve(inputPath), editPrompt);
-        } catch (openaiError: any) {
-          console.warn(`OpenAI modify failed (${openaiError.message}), falling back to Gemini`);
-          generatedImageUrl = await modifyJewelleryImage(path.resolve(inputPath), editPrompt);
+      // Start style detection immediately as a shared promise — all 3 models chain from it
+      // so analyzeImageStyle runs in parallel with any sync work and is NOT awaited sequentially.
+      // This preserves the same timing as before: style takes ~15s, models start as soon as it resolves.
+      const stylePromise = analyzeImageStyle(resolvedPath).catch(() => "jewellery image");
+
+      const buildStyleInstruction = (style: string): string => {
+        const s = style.toLowerCase();
+        if (s.includes("sketch") || s.includes("drawing") || s.includes("pencil") || s.includes("hand-drawn") || s.includes("line art")) {
+          return `OUTPUT STYLE: Hand-drawn jewellery design sketch — pencil/ink outlines on clean white paper background. Same artistic medium as the input. NOT photorealistic. NOT a photo.`;
         }
+        if (s.includes("cad") || s.includes("render") || s.includes("3d") || s.includes("computer")) {
+          return `OUTPUT STYLE: Photorealistic 3D CAD render — clean studio lighting, metallic gold surfaces, white or neutral background. Same render quality as the input.`;
+        }
+        return `OUTPUT STYLE: Photorealistic product photography — professional studio lighting, white or neutral background. Do NOT output a sketch, illustration, or cartoon. Match the realism of the input photo.`;
+      };
+
+      // Modify the image — all 3 models in parallel, each waiting only on the shared stylePromise
+      let settledResults: [PromiseSettledResult<string>, PromiseSettledResult<string>, PromiseSettledResult<string>];
+      try {
+        settledResults = await Promise.allSettled([
+          // Gemini: passes pre-computed style to skip its internal analyzeImageStyle call
+          stylePromise.then(style => modifyJewelleryImage(resolvedPath, editPrompt, style)),
+          // OpenAI: style-aware redesign prompt
+          stylePromise.then(style => {
+            const openAIEditPrompt = `You are a professional jewellery redesign AI. TASK: Redesign this jewellery piece so the output looks CLEARLY DIFFERENT from the input — apply the specifications below visibly (new motifs, stones, layout as instructed).\n\n${buildStyleInstruction(style)}\n\n${editPrompt}`;
+            return modifyImageWithOpenAI(resolvedPath, openAIEditPrompt);
+          }),
+          // Grok: style-aware variation prompt
+          stylePromise.then(style => {
+            const grokEditPrompt = `${buildStyleInstruction(style)}\n\nTASK: Apply the following design modifications to create a CLEARLY DIFFERENT variation of the uploaded jewellery. Do NOT copy the original — the output must reflect the new specifications.\n\n${editPrompt}`;
+            return modifyImageWithGrok(resolvedPath, grokEditPrompt);
+          }),
+        ]) as [PromiseSettledResult<string>, PromiseSettledResult<string>, PromiseSettledResult<string>];
       } finally {
         try { await fs.unlink(inputPath); } catch { /* ignore cleanup errors */ }
+      }
+      const [geminiResult, openaiResult, grokResult] = settledResults;
+
+      const generatedImageUrl = firstSuccessfulUrl([geminiResult, openaiResult, grokResult]);
+      if (!generatedImageUrl) {
+        const errors = [geminiResult, openaiResult, grokResult]
+          .filter((r): r is PromiseRejectedResult => r.status === "rejected")
+          .map(r => r.reason?.message).join("; ");
+        return res.status(500).json({ error: `All models failed: ${errors}` });
       }
 
       // ── AI Costing: analyze materials + compute cost report ──
@@ -993,7 +1315,7 @@ export async function registerRoutes(
             category: req.body.category || "Modification",
             budget: budgetRange.max,
             materialRatio: req.body.materialRatio || "",
-            stones: stoneColour,
+            stones: stoneName,
           });
 
           // Use user-provided gold percentage (slider), or fallback to 40
@@ -1001,15 +1323,17 @@ export async function registerRoutes(
             parseInt(req.body.goldPercentage as string, 10) || 40
           ));
 
+          const validated = validateBreakdown(breakdown, req.body.category || "Modification");
           costReport = generateCostingReport({
             totalBudget: budgetRange.max,
             goldPercentage,
             goldRatePerGram,
             goldPurity,
-            polki: breakdown.polki.map(p => ({ sieve: p.sieve, count: p.count })),
-            diamond: breakdown.diamond.map(d => ({ sieve: d.sieve, count: d.count })),
-            colorStones: breakdown.colorStones.map(c => ({ type: c.type, carats: c.carats })),
-            emeralds: breakdown.emeralds.map(e => ({ size_mm: e.size_mm, count: e.count })),
+            goldWeightGrams: validated.estimatedGoldWeightGrams,
+            polki: validated.polki.map(p => ({ sieve: p.sieve, count: p.count })),
+            diamond: validated.diamond.map(d => ({ sieve: d.sieve, count: d.count })),
+            colorStones: validated.colorStones.map(c => ({ type: c.type, carats: c.carats })),
+            emeralds: validated.emeralds.map(e => ({ size_mm: e.size_mm, count: e.count })),
           });
 
           console.log(`AI costing complete — total estimated: ₹${costReport.totalEstimatedCost.toLocaleString("en-IN")}`);
@@ -1023,7 +1347,7 @@ export async function registerRoutes(
         category: req.body.category || "Modification",
         theme: req.body.productSegment || "Custom",
         motifs,
-        stones: stoneColour,
+        stones: stoneName,
         materialRatio: req.body.materialRatio || "",
         customNotes: req.body.customNotes || "",
         sketchPlan: editPrompt,
@@ -1038,6 +1362,9 @@ export async function registerRoutes(
         generatedImageUrl,
         usedReferences: 0,
         costReport,
+        gemini: toModelResult(geminiResult, "gemini-3-pro-image-preview"),
+        openai: toModelResult(openaiResult, "gpt-image-1"),
+        grok: toModelResult(grokResult, "grok-imagine-image"),
       });
     } catch (error: any) {
       console.error("Error modifying design:", error);
@@ -1049,23 +1376,31 @@ export async function registerRoutes(
   app.post("/api/generate-cad-comparison", async (req, res) => {
     try {
       const {
-        productSegment, category, priceBand, polkiSize, motifCategory,
-        motifs, stoneColour, enamel, finish, designShape,
+        productSegment, category, priceBand, polkiSize, polkiSetting: reqPolkiSetting, motifCategory,
+        motifs, stoneName, stoneNameColour, stoneShape, stoneSetting: reqStoneSetting, diamondSetting: reqDiamondSetting, materialRatio,
+        enamel, finish, designShape, designType: cadDesignType, earringStyle,
         talaf, piroiPlacement, piroiColour, customNotes,
-        // Legacy fields for backward compatibility
-        theme, stones,
+        theme,
       } = req.body;
+      const cadTechniques: string[] = Array.isArray(req.body.techniques) ? req.body.techniques : [];
 
       const resolvedCategory = category || "Necklace";
       const resolvedTheme = productSegment || theme || "Modern";
-      const resolvedStones = stoneColour || stones || [];
+      const cadStoneNames: string[] = Array.isArray(stoneName) ? stoneName : [];
+      const cadStoneColours: string[] = Array.isArray(stoneNameColour) ? stoneNameColour : [];
+      const cadMotifCategories: string[] = Array.isArray(motifCategory) ? motifCategory : (motifCategory ? [motifCategory] : []);
+      const cadGoldRatePerGram = Number(req.body.goldRatePerGram) || 0;
+      const cadGoldPurityRaw = req.body.goldPurity as string;
+      const cadGoldPurity: GoldPurity = (cadGoldPurityRaw && cadGoldPurityRaw in GOLD_PURITY) ? cadGoldPurityRaw as GoldPurity : "18k";
+      const cadGoldPercentage = Math.max(5, Math.min(95, parseInt(req.body.goldPercentage as string, 10) || 40));
+      const cadMaterialRatio = materialRatio || "Gold Intensive";
 
       const validatedData = designProjectInputSchema.parse({
         category: resolvedCategory,
         theme: resolvedTheme,
-        motifs: motifs || [],
-        stones: resolvedStones,
-        materialRatio: "Gold Intensive",
+        motifs: Array.isArray(motifs) ? motifs : [],
+        stones: cadStoneNames,
+        materialRatio: cadMaterialRatio,
         customNotes,
       });
 
@@ -1073,7 +1408,7 @@ export async function registerRoutes(
         category: validatedData.category,
         theme: validatedData.theme,
         motifs: validatedData.motifs,
-        stones: validatedData.stones || [],
+        stones: cadStoneNames,
         materialRatio: validatedData.materialRatio,
         customNotes: validatedData.customNotes ?? undefined,
         similarDesigns: [],
@@ -1081,14 +1416,30 @@ export async function registerRoutes(
 
       let cadPrompt = buildCADPrompt(context);
 
-      // Append additional specifications from modify-style parameters
+      // Append additional specifications
       const extraSpecs: string[] = [];
-      if (priceBand) extraSpecs.push(`Price band: ${priceBand}`);
-      if (polkiSize) extraSpecs.push(`Polki size: ${polkiSize}`);
-      if (motifCategory) extraSpecs.push(`Motif category: ${motifCategory}`);
+      if (priceBand) {
+        const cadBandGuidance = PRICE_BAND_DESIGN_GUIDANCE[priceBand as string];
+        extraSpecs.push(`Price band: ${priceBand}${cadBandGuidance ? `\n${cadBandGuidance}` : ""}`);
+      }
+      const cadPolkiSizes: string[] = Array.isArray(polkiSize) ? polkiSize : (polkiSize ? [polkiSize] : []);
+      const cadPolkiSetting: string = reqPolkiSetting || "";
+      if (cadPolkiSetting) extraSpecs.push(`Polki setting style: ${cadPolkiSetting}`);
+      if (cadMotifCategories.length > 0) extraSpecs.push(`Motif category: ${cadMotifCategories.join(", ")}`);
+      if (cadStoneNames.length > 0) extraSpecs.push(`Stone names: ${cadStoneNames.join(", ")}`);
+      if (cadStoneColours.length > 0) extraSpecs.push(`Stone colours: ${cadStoneColours.join(", ")}`);
+      if (stoneShape) extraSpecs.push(`Stone shape: ${stoneShape}`);
+      const cadStoneSetting: string = reqStoneSetting || "";
+      if (cadStoneSetting) extraSpecs.push(`Stone setting: ${cadStoneSetting}`);
+      const cadDiamondSetting: string = reqDiamondSetting || "";
+      if (cadDiamondSetting) extraSpecs.push(`Diamond setting: ${cadDiamondSetting}`);
+      if (cadMaterialRatio && cadMaterialRatio !== "Gold Intensive") extraSpecs.push(`Material ratio: ${cadMaterialRatio}`);
       if (enamel) extraSpecs.push(`Enamel: ${enamel}`);
       if (finish) extraSpecs.push(`Finish: ${finish}`);
       if (designShape) extraSpecs.push(`Design shape: ${designShape}`);
+      if (cadDesignType) extraSpecs.push(`Design type: ${cadDesignType}`);
+      if (cadTechniques.length > 0) extraSpecs.push(`Techniques: ${cadTechniques.join(", ")}`);
+      if (earringStyle) extraSpecs.push(`Earring style: ${earringStyle}`);
       if (talaf) extraSpecs.push(`Talaf: ${talaf}`);
       if (piroiPlacement) extraSpecs.push(`Piroi placement: ${piroiPlacement}`);
       if (piroiColour) extraSpecs.push(`Piroi colour: ${piroiColour}`);
@@ -1096,6 +1447,11 @@ export async function registerRoutes(
       if (extraSpecs.length > 0) {
         cadPrompt += "\n" + extraSpecs.join("\n");
       }
+
+      const cadPolkiConstraint = cadPolkiSizes.length > 0
+        ? `CRITICAL — MANDATORY POLKI STONE SIZE:\nThe designer has specified the EXACT polki stone size. You MUST use ONLY this size:\n${cadPolkiSizes.map(s => `  • ${POLKI_SIZE_DESCRIPTIONS[s] || s}`).join("\n")}\nThis is REQUIRED. Do not draw default or medium-sized polki. Stone size compliance is mandatory.\n\n`
+        : "";
+      cadPrompt = cadPolkiConstraint + cadPrompt;
 
       // Generate both models in parallel — same prompt, different engines
       // OpenAI failure falls back to Gemini automatically (reuses already-generated Gemini image)
@@ -1105,28 +1461,60 @@ export async function registerRoutes(
       );
       const cadSize = cadIsPortrait ? "1024x1536" as const : "1024x1024" as const;
 
-      const [geminiResult, openaiResult] = await Promise.allSettled([
+      const [geminiResult, openaiResult, grokResult] = await Promise.allSettled([
         generateJewellerySketch(cadPrompt),
         generateCADImageWithOpenAI(cadPrompt, cadSize),
+        generateImageWithGrok(cadPrompt, cadIsPortrait ? "3:4" : "1:1"),
       ]);
 
-      if (geminiResult.status === "rejected") throw geminiResult.reason;
+      // At least one model must succeed
+      const anySuccess = [geminiResult, openaiResult, grokResult].some(r => r.status === "fulfilled");
+      if (!anySuccess) {
+        const errors = [geminiResult, openaiResult, grokResult]
+          .filter((r): r is PromiseRejectedResult => r.status === "rejected")
+          .map(r => r.reason?.message).join("; ");
+        return res.status(500).json({ error: `All models failed: ${errors}` });
+      }
 
-      let openaiUrl: string;
-      let openaiModel: string;
-      if (openaiResult.status === "fulfilled") {
-        openaiUrl = openaiResult.value;
-        openaiModel = "gpt-image-1";
-      } else {
-        console.warn(`OpenAI CAD comparison failed (${openaiResult.reason?.message}), using Gemini fallback`);
-        openaiUrl = geminiResult.value;
-        openaiModel = "gemini-3-pro-image-preview (OpenAI fallback)";
+      // ── AI Costing (only when price band + gold rate provided) ──
+      let cadCostReport: CostingReport | null = null;
+      const cadBudgetRange = priceBand ? PRICE_BAND_BUDGET[priceBand] : undefined;
+      if (cadBudgetRange && cadGoldRatePerGram > 0) {
+        try {
+          const cadImageUrl = firstSuccessfulUrl([geminiResult, openaiResult, grokResult]);
+          if (cadImageUrl) {
+            const cadGenPath = cadImageUrl.startsWith("/") ? path.join(".", cadImageUrl) : cadImageUrl;
+            const cadImageBase64 = (await fs.readFile(cadGenPath)).toString("base64");
+            const breakdown = await analyzeDesignMaterials(cadImageBase64, {
+              category: resolvedCategory,
+              budget: cadBudgetRange.max,
+              materialRatio: cadMaterialRatio,
+              stones: cadStoneNames,
+            });
+            const validated = validateBreakdown(breakdown, resolvedCategory);
+            cadCostReport = generateCostingReport({
+              totalBudget: cadBudgetRange.max,
+              goldPercentage: cadGoldPercentage,
+              goldRatePerGram: cadGoldRatePerGram,
+              goldPurity: cadGoldPurity,
+              goldWeightGrams: validated.estimatedGoldWeightGrams,
+              polki: validated.polki.map(p => ({ sieve: p.sieve, count: p.count })),
+              diamond: validated.diamond.map(d => ({ sieve: d.sieve, count: d.count })),
+              colorStones: validated.colorStones.map(c => ({ type: c.type, carats: c.carats })),
+              emeralds: validated.emeralds.map(e => ({ size_mm: e.size_mm, count: e.count })),
+            });
+          }
+        } catch (costError: any) {
+          console.warn(`[generate-cad-comparison] costing failed: ${costError.message}`);
+        }
       }
 
       res.json({
-        gemini: { imageUrl: geminiResult.value, model: "gemini-3-pro-image-preview" },
-        openai: { imageUrl: openaiUrl, model: openaiModel },
+        gemini: toModelResult(geminiResult, "gemini-3-pro-image-preview"),
+        openai: toModelResult(openaiResult, "gpt-image-1"),
+        grok: toModelResult(grokResult, "grok-imagine-image"),
         prompt: cadPrompt,
+        costReport: cadCostReport,
       });
     } catch (error: any) {
       console.error("Error generating CAD comparison:", error);
@@ -1178,10 +1566,11 @@ export async function registerRoutes(
         customNotes: customNotes || undefined,
       });
 
-      // Run both AI models in parallel — allSettled so one failure doesn't block the other
-      const [geminiResult, openaiResult] = await Promise.allSettled([
+      // Run all 3 AI models in parallel — allSettled so one failure doesn't block the others
+      const [geminiResult, openaiResult, grokResult] = await Promise.allSettled([
         generateMarketingVisualGemini(base64Image, prompt),
         generateMarketingVisualOpenAI(base64Image, prompt),
+        generateMarketingVisualGrok(base64Image, prompt),
       ]);
 
       // Ensure designs/marketing directory exists
@@ -1192,29 +1581,42 @@ export async function registerRoutes(
       let geminiError: string | null = null;
       let openaiUrl: string | null = null;
       let openaiError: string | null = null;
+      let grokUrl: string | null = null;
+      let grokError: string | null = null;
+      const rand = Math.random().toString(36).slice(2, 8);
 
       if (geminiResult.status === "fulfilled") {
-        const filename = `${Date.now()}-gemini.png`;
+        const filename = `${Date.now()}-${rand}-gemini.png`;
         const filepath = path.join(marketingDir, filename);
         await fs.writeFile(filepath, Buffer.from(geminiResult.value, "base64"));
         geminiUrl = `/designs/marketing/${filename}`;
       } else {
-        geminiError = geminiResult.reason?.message || "Gemini generation failed";
-        console.error("Gemini marketing visual failed:", geminiError);
+        console.error("Gemini marketing visual failed:", geminiResult.reason);
+        geminiError = "Gemini generation failed";
       }
 
       if (openaiResult.status === "fulfilled") {
-        const filename = `${Date.now()}-openai.png`;
+        const filename = `${Date.now()}-${rand}-openai.png`;
         const filepath = path.join(marketingDir, filename);
         await fs.writeFile(filepath, Buffer.from(openaiResult.value, "base64"));
         openaiUrl = `/designs/marketing/${filename}`;
       } else {
-        openaiError = openaiResult.reason?.message || "OpenAI generation failed";
-        console.error("OpenAI marketing visual failed:", openaiError);
+        console.error("OpenAI marketing visual failed:", openaiResult.reason);
+        openaiError = "OpenAI generation failed";
+      }
+
+      if (grokResult.status === "fulfilled") {
+        const filename = `${Date.now()}-${rand}-grok.png`;
+        const filepath = path.join(marketingDir, filename);
+        await fs.writeFile(filepath, Buffer.from(grokResult.value, "base64"));
+        grokUrl = `/designs/marketing/${filename}`;
+      } else {
+        console.error("Grok marketing visual failed:", grokResult.reason);
+        grokError = "Grok generation failed";
       }
 
       // Save to database using the first successful result
-      const primaryImageUrl = geminiUrl || openaiUrl;
+      const primaryImageUrl = geminiUrl || openaiUrl || grokUrl;
       let projectId: string | null = null;
 
       if (primaryImageUrl) {
@@ -1235,12 +1637,197 @@ export async function registerRoutes(
       res.json({
         projectId,
         prompt,
-        gemini: { imageUrl: geminiUrl, error: geminiError },
-        openai: { imageUrl: openaiUrl, error: openaiError },
+        gemini: { imageUrl: geminiUrl, error: geminiError, model: "gemini-3-pro-image-preview" },
+        openai: { imageUrl: openaiUrl, error: openaiError, model: "gpt-image-1" },
+        grok: { imageUrl: grokUrl, error: grokError, model: "grok-imagine-image" },
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error generating marketing visual:", error);
-      res.status(500).json({ error: error.message });
+      const msg = error instanceof Error ? error.message : "Marketing visual generation failed";
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // ── POST /api/import-design-images ─────────────────────────────────────────
+  app.post("/api/import-design-images", async (_req, res) => {
+    if (designImportJob.running) {
+      return res.json({ status: 'already_running', ...designImportJob });
+    }
+
+    try {
+      const designImagesDir = path.join(process.cwd(), 'design images');
+      const allFiles: DesignImageFile[] = [];
+      const segmentFolders = await fs.readdir(designImagesDir);
+
+      for (const segFolder of segmentFolders) {
+        const segPath = path.join(designImagesDir, segFolder);
+        const stat    = await fs.stat(segPath);
+        if (!stat.isDirectory()) continue;
+
+        const productSegment = DESIGN_IMAGE_SEGMENT_MAP[segFolder] ?? segFolder;
+        const segContents    = await fs.readdir(segPath);
+
+        const hasSubfolders = (await Promise.all(
+          segContents.map(async (name) => (await fs.stat(path.join(segPath, name))).isDirectory())
+        )).some(Boolean);
+
+        if (hasSubfolders) {
+          for (const subFolder of segContents) {
+            const subPath = path.join(segPath, subFolder);
+            if (!(await fs.stat(subPath)).isDirectory()) continue;
+            const imageFiles = (await fs.readdir(subPath)).filter(f => /\.(jpe?g)$/i.test(f));
+            for (const f of imageFiles) {
+              allFiles.push({
+                sourcePath:     path.join(subPath, f),
+                filename:       f,
+                productSegment,
+                category:       subFolder,
+                themeCode:      parseThemeCodeFromFilename(f),
+              });
+            }
+          }
+        } else {
+          const imageFiles = segContents.filter(f => /\.(jpe?g)$/i.test(f));
+          for (const f of imageFiles) {
+            allFiles.push({
+              sourcePath:     path.join(segPath, f),
+              filename:       f,
+              productSegment,
+              category:       '',
+              themeCode:      parseThemeCodeFromFilename(f),
+            });
+          }
+        }
+      }
+
+      const existing      = await storage.getAllReferenceImages();
+      const existingNames = new Set(existing.map(r => r.filename));
+      const toImport      = allFiles.filter(f => !existingNames.has(f.filename));
+
+      designImportJob = {
+        running:   true,
+        total:     toImport.length,
+        processed: 0,
+        failed:    0,
+        skipped:   allFiles.length - toImport.length,
+        errors:    [],
+      };
+
+      runDesignImageImport(toImport).catch(err => {
+        console.error('[import-design-images] Background job error:', err instanceof Error ? err.message : String(err));
+        designImportJob.running = false;
+      });
+
+      res.json({
+        status:          'started',
+        total:           toImport.length,
+        alreadyImported: allFiles.length - toImport.length,
+      });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // ── GET /api/import-design-images/status ────────────────────────────────────
+  app.get("/api/import-design-images/status", (_req, res) => {
+    res.json(designImportJob);
+  });
+
+  // ── POST /api/debug-prompt ──────────────────────────────────────────────────
+  // Returns the full assembled prompt WITHOUT calling any AI model.
+  // Used by Playwright tests to validate prompt content without burning API credits.
+  app.post("/api/debug-prompt", (req, res) => {
+    try {
+      const category = req.body.category || "Choker";
+      const productSegment = req.body.productSegment || "";
+      const priceBand = req.body.priceBand || "";
+      let polkiSizes: string[] = [];
+      try { polkiSizes = req.body.polkiSize ? (typeof req.body.polkiSize === "string" ? JSON.parse(req.body.polkiSize) : req.body.polkiSize) : []; } catch { polkiSizes = []; }
+      let techniques: string[] = [];
+      try { techniques = req.body.techniques ? (typeof req.body.techniques === "string" ? JSON.parse(req.body.techniques) : req.body.techniques) : []; } catch { techniques = []; }
+      let motifCategories: string[] = [];
+      try { const mc = req.body.motifCategory; if (mc) { try { motifCategories = JSON.parse(mc); } catch { motifCategories = [mc]; } } } catch { motifCategories = []; }
+      let motifs: string[] = [];
+      try { motifs = req.body.motifs ? JSON.parse(req.body.motifs) : []; } catch { motifs = []; }
+      let stoneName: string[] = [];
+      try { stoneName = req.body.stoneName ? JSON.parse(req.body.stoneName) : []; } catch { stoneName = []; }
+      let stoneNameColour: string[] = [];
+      try { stoneNameColour = req.body.stoneNameColour ? JSON.parse(req.body.stoneNameColour) : []; } catch { stoneNameColour = []; }
+      const stoneShape = req.body.stoneShape || "";
+      const enamel = req.body.enamel || "";
+      const finish = req.body.finish || "";
+      const designShape = req.body.designShape || "";
+      const designType: string = req.body.designType || "";
+      const earringStyle = req.body.earringStyle || "";
+      const materialRatio = req.body.materialRatio || "Gold Intensive";
+      const talaf = req.body.talaf || "";
+      const piroiPlacement = req.body.piroiPlacement || "";
+      const piroiColour = req.body.piroiColour || "";
+      const customNotes = req.body.customNotes || undefined;
+      const polkiSetting: string = req.body.polkiSetting || "";
+      const stoneSetting: string = req.body.stoneSetting || "";
+      const diamondSetting: string = req.body.diamondSetting || "";
+
+      // Build extra specs string (same logic as generate-design)
+      const extraSpecs: string[] = [];
+      if (priceBand) {
+        const bandGuidance = PRICE_BAND_DESIGN_GUIDANCE[priceBand];
+        extraSpecs.push(`Price Band: ${priceBand}${bandGuidance ? `\n${bandGuidance}` : ""}`);
+      }
+      if (polkiSetting) extraSpecs.push(`Polki Setting Style: ${polkiSetting}`);
+      if (motifCategories.length > 0) extraSpecs.push(`Motif Category: ${motifCategories.join(", ")}`);
+      if (stoneName.length > 0) extraSpecs.push(`Stone Names: ${stoneName.join(", ")}`);
+      if (stoneNameColour.length > 0) extraSpecs.push(`Stone Colours: ${stoneNameColour.join(", ")}`);
+      if (stoneShape) extraSpecs.push(`Stone Shape: ${stoneShape}`);
+      if (stoneSetting) extraSpecs.push(`Stone Setting: ${stoneSetting}`);
+      if (diamondSetting) extraSpecs.push(`Diamond Setting: ${diamondSetting}`);
+      if (enamel) extraSpecs.push(`Enamel: ${enamel}`);
+      if (finish) extraSpecs.push(`Finish: ${finish}`);
+      if (designShape) extraSpecs.push(`Design Shape: ${designShape}`);
+      if (designType) extraSpecs.push(`Design Type: ${designType}`);
+      if (techniques.length > 0) extraSpecs.push(`Techniques: ${techniques.join(", ")}`);
+      if (earringStyle) extraSpecs.push(`Earring Style: ${earringStyle}`);
+      if (talaf && talaf !== "None") extraSpecs.push(`Talaf: ${talaf}`);
+      if (piroiPlacement && piroiPlacement !== "None") extraSpecs.push(`Piroi Placement: ${piroiPlacement}`);
+      if (piroiColour && piroiColour !== "None") extraSpecs.push(`Piroi Colour: ${piroiColour}`);
+      const extraSpecsStr = extraSpecs.length > 0 ? "\n\nAdditional Specifications:\n" + extraSpecs.join("\n") : "";
+
+      // Build context and image prompt (same logic as generate-design, no RAG)
+      const context: DesignContext = {
+        category,
+        theme: productSegment || "Modern",
+        motifs,
+        stones: stoneName,
+        materialRatio,
+        customNotes,
+        similarDesigns: [],
+      };
+
+      const imagePrompt = buildImagePrompt(context) + extraSpecsStr;
+
+      // Determine if pure polki (no colored stones)
+      const isPurePolki = stoneName.length === 0;
+
+      // Build polki size constraint (same logic as generate-design)
+      const polkiSizeConstraint = polkiSizes.length > 0
+        ? `CRITICAL — MANDATORY POLKI STONE SIZE (OVERRIDES ALL OTHER INSTRUCTIONS INCLUDING BUDGET TIER SIEVE SIZES):\nThe designer has specified the EXACT polki stone size. You MUST use ONLY this size:\n${polkiSizes.map(s => `  • ${POLKI_SIZE_DESCRIPTIONS[s] || s}`).join("\n")}\nThis is REQUIRED. Do not draw default or medium-sized polki. Stone size compliance is mandatory.`
+        : "";
+
+      // Assemble full prompt using sandwich pattern (same as generate-design sketch mode)
+      const sizeHeader = polkiSizeConstraint ? polkiSizeConstraint + "\n\n" : "";
+      const fullPrompt = sizeHeader + BRAND_RULES + "\n\n" + imagePrompt + (polkiSizeConstraint ? "\n\n" + polkiSizeConstraint : "");
+
+      res.json({
+        fullPrompt,
+        polkiSizeConstraint,
+        isPurePolki,
+        stonesList: stoneName,
+        polkiSizes,
+      });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
     }
   });
 

@@ -1,16 +1,16 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { Layout } from "@/components/layout";
 import { OrnamentalDivider } from "@/components/ornamental-divider";
-import { ResultDisplay } from "@/components/result-display";
+import { MultiModelResult } from "@/components/multi-model-result";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useToast } from "@/hooks/use-toast";
-import { modifyDesign, type ModifyDesignParams, type ModifyDesignResponse, SEGMENT_CATEGORY_PRICE_MAP } from "@/lib/api";
+import { modifyDesign, type ModifyDesignParams, type ModifyDesignResponse, SEGMENT_CATEGORY_PRICE_MAP, DESIGN_SHAPE_MAP, STONE_NAME_COLOUR_MAP, ALL_STONE_NAMES, STONE_SHAPES } from "@/lib/api";
 import { Loader2, Upload, X, ImageIcon } from "lucide-react";
 import { CostReport } from "@/components/cost-report";
 
@@ -18,27 +18,51 @@ import { CostReport } from "@/components/cost-report";
 
 const PRODUCT_SEGMENTS = Object.keys(SEGMENT_CATEGORY_PRICE_MAP);
 
-const POLKI_SIZES = ["Far", "Big", "Normal"];
+const POLKI_SIZES = ["Far", "Big", "Medium", "Small"];
+
+const TECHNIQUES = ["Talpe", "Piroyee (Piroi)", "Enamel", "Twisted Wire", "Metal Texture"];
+
+const POLKI_SETTINGS = [
+  "Bezel / Ghaati", "Patti", "Prong", "Jadai", "Paal / Katori", "Matha Setting",
+  "3 Prong Setting", "Preminu/Tiger Claw", "Gadd Setting", "Data Prong", "Kundan Cut",
+];
 
 const MOTIF_CATEGORIES = [
-  "Animal & Bird", "Celestial & Spiritual", "Contemporary Luxury",
-  "Forms & Shapes", "Nature - Inspired", "Multiple Choice", "No Motifs",
+  "Animal & Bird",
+  "Celestial & Spiritual",
+  "Nature-Inspired",
+  "Contemporary Luxury",
+  "Forms & Shapes",
+  "Multiple Choice",
+  "No Motifs",
 ];
 
 const MOTIF_GROUPS: Record<string, string[]> = {
-  "Animal & Bird": ["Bird", "Horse", "Parrot", "Peacock", "Elephant", "Butterfly", "Tiger/Panther", "Swan", "Lion"],
-  "Celestial & Spiritual": ["Sun", "Crescent Moon", "Stars"],
-  "Contemporary Luxury": ["Art Deco", "Victorian Art", "Scallop", "Ribbons"],
-  "Forms & Shapes": ["Domes & Arches", "Geometric", "Abstract", "Asymmetrical", "Ovals", "Marquise", "Pears", "Curves", "Jaali Patterns"],
-  "Nature - Inspired": ["Lotus", "Rose", "Tulip", "Paan", "Paisley", "Leaves", "Cluster Flowers"],
+  "Animal & Bird": [
+    "Swan", "Parrot", "Peacock", "Elephant", "Butterfly", "Tiger", "Lion",
+    "Bird", "Lady Bug", "Dragonfly", "Honey Bee", "Phoenix Bird", "Panda",
+    "Bear", "Dolphin", "Turtle", "Horse",
+  ],
+  "Celestial & Spiritual": [
+    "Sun", "Crescent Moon", "Stars", "Om Symbol", "Tree of Life",
+    "Angel Wings", "Zodiacs", "Healing Chakras", "Hamsa Palm", "Evil Eye",
+  ],
+  "Nature-Inspired": [
+    "Lotus", "Rose", "Tulip", "Paan", "Paisley", "Leaves", "Cluster Flowers", "Clover Leaf",
+  ],
+  "Contemporary Luxury": [
+    "Art Deco", "Victorian Art", "Filigree",
+  ],
+  "Forms & Shapes": [
+    "Geometric", "Abstract", "Asymmetrical", "Scallop", "Ribbons",
+    "Domes & Arches", "Curves", "Ovals", "Marquise", "Diamond Shape",
+    "Pears", "Heart", "Spade", "Club",
+  ],
+  "Multiple Choice": [
+    "Jaali Patterns",
+  ],
+  // "No Motifs" intentionally has no entry — produces empty motif list
 };
-
-const ALL_MOTIFS = Object.values(MOTIF_GROUPS).flat();
-
-const STONE_COLOURS = [
-  "Red Stone", "Green Stone", "Blue Stone", "Pink Stone", "White Stone",
-  "Coral Stone", "Multicolour Stone", "Navratna Stone", "Violet Stone", "Yellow Stone",
-];
 
 const FINISHES = [
   "Yellow Gold Finish", "Light Antique", "Dark Antique", "Matte",
@@ -56,9 +80,22 @@ const MATERIAL_RATIOS = [
   "Gold Intensive", "Piroi Intensive",
 ];
 
+const DESIGN_TYPES = ["Graduation/Gradation", "Dome", "Lines (LNS)", "Dant"];
+
 const TALAFS = ["None", "Talaf-Red", "Talaf-Green", "Talaf-Blue", "Talaf-Pink"];
 const PIROI_PLACEMENTS = ["None", "Top", "Front", "Back", "Latkan"];
 const PIROI_COLOURS = ["None", "Red", "Green", "Blue", "White", "Pink"];
+
+const STONE_SETTINGS: Record<string, string[]> = {
+  Traditional: ["Bezel", "Pave", "Rava Prong", "Data Prong", "Partash (Texture Bezel)"],
+  Modern: ["Prong", "U Prong", "V Prong", "Claw", "Diamond Prong", "Triple Claw Prong", "Half Bezel", "Gemstone Prong"],
+};
+
+const DIAMOND_SETTINGS: Record<string, string[]> = {
+  Traditional: ["Bezel", "Chungi / Chakri"],
+  Modern: ["Pave", "Micro Pave", "Prong", "Claw (for big size diamond)"],
+};
+
 
 // ─── Form types ───────────────────────────────────────────────────────────────
 
@@ -66,13 +103,16 @@ interface FormValues {
   productSegment: string;
   category: string;
   priceBand: string;
-  polkiSize: string;
-  motifCategory: string;
+  polkiSize: string[];
+  polkiSetting: string;
+  motifCategory: string[];
   motifs: string[];
-  stoneColour: string[];
   enamel: string;
   finish: string;
   designShape: string;
+  designType: string;
+  techniques: string[];
+  earringStyle: string;
   materialRatio: string;
   goldRatePerGram: number;
   goldPurity: string;
@@ -80,6 +120,11 @@ interface FormValues {
   talaf: string;
   piroiPlacement: string;
   piroiColour: string;
+  stoneName: string[];
+  stoneNameColour: string[];
+  stoneShape: string;
+  stoneSetting: string;
+  diamondSetting: string;
   customNotes: string;
 }
 
@@ -91,13 +136,23 @@ export default function ModifyPage() {
   const [result, setResult] = useState<ModifyDesignResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const costReportRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
   const { register, handleSubmit, watch, setValue, getValues } = useForm<FormValues>({
     defaultValues: {
+      polkiSize: [],
+      polkiSetting: "",
+      motifCategory: [],
       motifs: [],
-      stoneColour: [],
+      stoneName: [],
+      stoneNameColour: [],
+      stoneShape: "",
+      stoneSetting: "",
+      diamondSetting: "",
       enamel: "",
+      designType: "",
+      techniques: [],
       goldRatePerGram: 7000,
       goldPurity: "18k",
       goldPercentage: 40,
@@ -107,12 +162,21 @@ export default function ModifyPage() {
     },
   });
 
+  const watchedPolkiSizes = watch("polkiSize") || [];
+  const watchedTechniques = watch("techniques") || [];
+  const watchedMotifCategories = watch("motifCategory") || [];
   const watchedMotifs = watch("motifs") || [];
-  const watchedStones = watch("stoneColour") || [];
+  const watchedStoneNames = watch("stoneName") || [];
+  const watchedStoneNameColours = watch("stoneNameColour") || [];
   const watchedSegment = watch("productSegment");
   const watchedCategory = watch("category");
   const watchedGoldPurity = watch("goldPurity") || "18k";
   const watchedGoldPercentage = watch("goldPercentage") ?? 40;
+
+  // Colours available for the stone-name colour picker — union of selected stones' colours
+  const availableStoneNameColours = watchedStoneNames.length > 0
+    ? Array.from(new Set(watchedStoneNames.flatMap(n => STONE_NAME_COLOUR_MAP[n] ?? [])))
+    : Array.from(new Set(Object.values(STONE_NAME_COLOUR_MAP).flat()));
 
   // Derive cascading options
   const availableCategories = watchedSegment
@@ -121,6 +185,11 @@ export default function ModifyPage() {
   const availablePriceBands = watchedSegment && watchedCategory
     ? (SEGMENT_CATEGORY_PRICE_MAP[watchedSegment] || []).find(e => e.category === watchedCategory)?.price_bands || []
     : [];
+
+  // Derive design shape + earring style from category
+  const shapeEntry = watchedCategory ? DESIGN_SHAPE_MAP[watchedCategory] : null;
+  const availableDesignShapes = shapeEntry?.shapes ?? DESIGN_SHAPES;
+  const availableEarringStyles = shapeEntry?.earringStyles ?? [];
 
   // ── File handling ──────────────────────────────────────────────────────────
 
@@ -153,14 +222,55 @@ export default function ModifyPage() {
 
   // ── Checkbox helpers ───────────────────────────────────────────────────────
 
+  function togglePolkiSize(size: string) {
+    const current = getValues("polkiSize") || [];
+    setValue("polkiSize", current.includes(size) ? current.filter(s => s !== size) : [...current, size]);
+  }
+
+  function toggleTechnique(t: string) {
+    const current = getValues("techniques") || [];
+    setValue("techniques", current.includes(t) ? current.filter(x => x !== t) : [...current, t]);
+  }
+
+  function toggleMotifCategory(cat: string) {
+    const current = getValues("motifCategory") || [];
+    const next = current.includes(cat) ? current.filter(c => c !== cat) : [...current, cat];
+    setValue("motifCategory", next);
+  }
+
+  useEffect(() => {
+    const available = new Set(
+      watchedMotifCategories.flatMap(cat => MOTIF_GROUPS[cat] ?? [])
+    );
+    const currentMotifs = getValues("motifs") || [];
+    setValue("motifs", currentMotifs.filter(m => available.has(m)));
+  }, [watchedMotifCategories]);
+
+  // Compute motif groups to display based on selected categories
+  const availableMotifGroups = watchedMotifCategories.length === 0
+    ? []
+    : watchedMotifCategories
+        .filter(cat => cat !== "No Motifs" && MOTIF_GROUPS[cat])
+        .map(cat => ({ group: cat, motifs: MOTIF_GROUPS[cat] }));
+
   function toggleMotif(motif: string) {
     const current = getValues("motifs") || [];
     setValue("motifs", current.includes(motif) ? current.filter(m => m !== motif) : [...current, motif]);
   }
 
-  function toggleStone(stone: string) {
-    const current = getValues("stoneColour") || [];
-    setValue("stoneColour", current.includes(stone) ? current.filter(s => s !== stone) : [...current, stone]);
+  function toggleStoneName(name: string) {
+    const current = getValues("stoneName") || [];
+    const next = current.includes(name) ? current.filter(n => n !== name) : [...current, name];
+    setValue("stoneName", next);
+    // Drop colour selections that are no longer valid for the new stone set
+    const validColours = new Set(next.flatMap(n => STONE_NAME_COLOUR_MAP[n] ?? []));
+    const currentColours = getValues("stoneNameColour") || [];
+    setValue("stoneNameColour", currentColours.filter(c => validColours.has(c)));
+  }
+
+  function toggleStoneNameColour(colour: string) {
+    const current = getValues("stoneNameColour") || [];
+    setValue("stoneNameColour", current.includes(colour) ? current.filter(c => c !== colour) : [...current, colour]);
   }
 
   // ── Submit ─────────────────────────────────────────────────────────────────
@@ -177,13 +287,16 @@ export default function ModifyPage() {
         productSegment: values.productSegment || undefined,
         category: values.category || undefined,
         priceBand: values.priceBand || undefined,
-        polkiSize: values.polkiSize || undefined,
-        motifCategory: values.motifCategory || undefined,
+        polkiSize: values.polkiSize?.length ? values.polkiSize : undefined,
+        polkiSetting: values.polkiSetting || undefined,
+        motifCategory: values.motifCategory?.length ? values.motifCategory.join(", ") : undefined,
         motifs: values.motifs?.length ? values.motifs : undefined,
-        stoneColour: values.stoneColour?.length ? values.stoneColour : undefined,
         enamel: values.enamel || undefined,
         finish: values.finish || undefined,
         designShape: values.designShape || undefined,
+        designType: values.designType || undefined,
+        techniques: values.techniques?.length ? values.techniques : undefined,
+        earringStyle: values.earringStyle || undefined,
         materialRatio: values.materialRatio || undefined,
         goldRatePerGram: values.goldRatePerGram || undefined,
         goldPurity: values.goldPurity || undefined,
@@ -191,11 +304,19 @@ export default function ModifyPage() {
         talaf: values.talaf !== "None" ? values.talaf : undefined,
         piroiPlacement: values.piroiPlacement !== "None" ? values.piroiPlacement : undefined,
         piroiColour: values.piroiColour !== "None" ? values.piroiColour : undefined,
+        stoneName: values.stoneName?.length ? values.stoneName : undefined,
+        stoneNameColour: values.stoneNameColour?.length ? values.stoneNameColour : undefined,
+        stoneShape: values.stoneShape || undefined,
+        stoneSetting: values.stoneSetting || undefined,
+        diamondSetting: values.diamondSetting || undefined,
         customNotes: values.customNotes || undefined,
       };
 
       const data = await modifyDesign(uploadedFile, params);
       setResult(data);
+      if (data.costReport) {
+        setTimeout(() => costReportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
+      }
     } catch (error: any) {
       toast({ title: "Modification failed", description: error.message || "Failed to modify design. Please try again.", variant: "destructive" });
     } finally {
@@ -304,6 +425,8 @@ export default function ModifyPage() {
                 onValueChange={v => {
                   setValue("category", v);
                   setValue("priceBand", "");
+                  setValue("designShape", "");
+                  setValue("earringStyle", "");
                 }}
                 disabled={!watchedSegment}
               >
@@ -313,6 +436,22 @@ export default function ModifyPage() {
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Earring Style (only for Set categories) */}
+            {availableEarringStyles.length > 0 && (
+              <div className="space-y-1.5">
+                <Label className="font-serif text-sm font-medium">Earring Style</Label>
+                <Select
+                  value={watch("earringStyle") || ""}
+                  onValueChange={v => setValue("earringStyle", v)}
+                >
+                  <SelectTrigger><SelectValue placeholder="Select earring style" /></SelectTrigger>
+                  <SelectContent>
+                    {availableEarringStyles.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             {/* Price Band (cascaded from Segment + Category) */}
             <div className="space-y-1.5">
@@ -330,67 +469,172 @@ export default function ModifyPage() {
             </div>
 
             {/* Polki Size */}
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <Label className="font-serif text-sm font-medium">Polki Size</Label>
-              <Select onValueChange={v => setValue("polkiSize", v)}>
-                <SelectTrigger><SelectValue placeholder="Select size" /></SelectTrigger>
+              <div className="flex flex-wrap gap-3 border border-border/40 rounded-lg p-3 bg-white/40">
+                {POLKI_SIZES.map(size => (
+                  <label key={size} className="flex items-center gap-1.5 cursor-pointer">
+                    <Checkbox
+                      checked={watchedPolkiSizes.includes(size)}
+                      onCheckedChange={() => togglePolkiSize(size)}
+                    />
+                    <span className="text-xs">{size}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Polki Setting */}
+            <div className="space-y-2">
+              <Label className="font-serif text-sm font-medium">Polki Setting</Label>
+              <Select value={watch("polkiSetting") || ""} onValueChange={(v) => setValue("polkiSetting", v)}>
+                <SelectTrigger className="bg-white/40 border-border/40">
+                  <SelectValue placeholder="Select setting style" />
+                </SelectTrigger>
                 <SelectContent>
-                  {POLKI_SIZES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                  {POLKI_SETTINGS.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
 
             {/* Motif Category */}
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <Label className="font-serif text-sm font-medium">Motif Category</Label>
-              <Select onValueChange={v => setValue("motifCategory", v)}>
-                <SelectTrigger><SelectValue placeholder="Select motif category" /></SelectTrigger>
-                <SelectContent>
-                  {MOTIF_CATEGORIES.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <div className="flex flex-wrap gap-2 border border-border/40 rounded-lg p-3 bg-white/40">
+                {MOTIF_CATEGORIES.map(cat => (
+                  <label key={cat} className="flex items-center gap-1.5 cursor-pointer">
+                    <Checkbox
+                      checked={watchedMotifCategories.includes(cat)}
+                      onCheckedChange={() => toggleMotifCategory(cat)}
+                    />
+                    <span className="text-xs">{cat}</span>
+                  </label>
+                ))}
+              </div>
+              {watchedMotifCategories.length > 0 && (
+                <p className="text-xs text-muted-foreground">{watchedMotifCategories.length} category(s) selected</p>
+              )}
             </div>
 
             {/* Motifs */}
             <div className="space-y-2">
               <Label className="font-serif text-sm font-medium">Motifs</Label>
               <div className="space-y-3 border border-border/40 rounded-lg p-3 bg-white/40 max-h-64 overflow-y-auto">
-                {Object.entries(MOTIF_GROUPS).map(([group, motifs]) => (
-                  <div key={group}>
-                    <p className="text-xs font-medium text-muted-foreground mb-1.5 uppercase tracking-wide">{group}</p>
-                    <div className="flex flex-wrap gap-2">
-                      {motifs.map(motif => (
-                        <label key={motif} className="flex items-center gap-1.5 cursor-pointer">
-                          <Checkbox
-                            checked={watchedMotifs.includes(motif)}
-                            onCheckedChange={() => toggleMotif(motif)}
-                          />
-                          <span className="text-xs">{motif}</span>
-                        </label>
-                      ))}
+                {availableMotifGroups.length === 0 ? (
+                  <p className="text-xs text-muted-foreground/60">
+                    {watchedMotifCategories.includes("No Motifs")
+                      ? "No Motifs selected — no motif will be applied"
+                      : "Select motif categories above to see available motifs"}
+                  </p>
+                ) : (
+                  availableMotifGroups.map(({ group, motifs }) => (
+                    <div key={group}>
+                      <p className="text-xs font-medium text-muted-foreground mb-1.5 uppercase tracking-wide">{group}</p>
+                      <div className="flex flex-wrap gap-2">
+                        {motifs.map(motif => (
+                          <label key={motif} className="flex items-center gap-1.5 cursor-pointer">
+                            <Checkbox
+                              checked={watchedMotifs.includes(motif)}
+                              onCheckedChange={() => toggleMotif(motif)}
+                            />
+                            <span className="text-xs">{motif}</span>
+                          </label>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
               {watchedMotifs.length > 0 && (
                 <p className="text-xs text-muted-foreground">{watchedMotifs.length} motif(s) selected</p>
               )}
             </div>
 
-            {/* Stone Colour */}
+            {/* Stone Name */}
             <div className="space-y-2">
-              <Label className="font-serif text-sm font-medium">Stone Colour</Label>
-              <div className="flex flex-wrap gap-2 border border-border/40 rounded-lg p-3 bg-white/40">
-                {STONE_COLOURS.map(stone => (
-                  <label key={stone} className="flex items-center gap-1.5 cursor-pointer">
+              <Label className="font-serif text-sm font-medium">Stone Name</Label>
+              <div className="flex flex-wrap gap-2 border border-border/40 rounded-lg p-3 bg-white/40 max-h-48 overflow-y-auto">
+                {ALL_STONE_NAMES.map(name => (
+                  <label key={name} className="flex items-center gap-1.5 cursor-pointer">
                     <Checkbox
-                      checked={watchedStones.includes(stone)}
-                      onCheckedChange={() => toggleStone(stone)}
+                      checked={watchedStoneNames.includes(name)}
+                      onCheckedChange={() => toggleStoneName(name)}
                     />
-                    <span className="text-xs">{stone}</span>
+                    <span className="text-xs">{name}</span>
                   </label>
                 ))}
               </div>
+              {watchedStoneNames.length > 0 && (
+                <p className="text-xs text-muted-foreground">{watchedStoneNames.length} stone(s) selected</p>
+              )}
+            </div>
+
+            {/* Stone Name Colour */}
+            <div className="space-y-2">
+              <Label className="font-serif text-sm font-medium">Stone Color</Label>
+              <div className="flex flex-wrap gap-2 border border-border/40 rounded-lg p-3 bg-white/40 min-h-[48px]">
+                {availableStoneNameColours.map(colour => (
+                  <label
+                    key={colour}
+                    className={`flex items-center gap-1.5 ${
+                      watchedStoneNames.length === 0 ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                    }`}
+                  >
+                    <Checkbox
+                      checked={watchedStoneNameColours.includes(colour)}
+                      onCheckedChange={() => toggleStoneNameColour(colour)}
+                      disabled={watchedStoneNames.length === 0}
+                    />
+                    <span className="text-xs">{colour}</span>
+                  </label>
+                ))}
+              </div>
+              {watchedStoneNames.length === 0 && (
+                <p className="text-xs text-muted-foreground/60">Select stone names above to filter colours</p>
+              )}
+            </div>
+
+            {/* Stone Shape */}
+            <div className="space-y-1.5">
+              <Label className="font-serif text-sm font-medium">Stone Shape</Label>
+              <Select onValueChange={v => setValue("stoneShape", v)}>
+                <SelectTrigger><SelectValue placeholder="Select stone shape" /></SelectTrigger>
+                <SelectContent>
+                  {STONE_SHAPES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Stone Setting */}
+            <div className="space-y-1.5">
+              <Label className="font-serif text-sm font-medium">Stone Setting</Label>
+              <Select value={watch("stoneSetting") || ""} onValueChange={v => setValue("stoneSetting", v)}>
+                <SelectTrigger className="bg-white/40 border-border/40"><SelectValue placeholder="Select setting style" /></SelectTrigger>
+                <SelectContent>
+                  {Object.entries(STONE_SETTINGS).map(([group, options]) => (
+                    <SelectGroup key={group}>
+                      <SelectLabel>{group}</SelectLabel>
+                      {options.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                    </SelectGroup>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Diamond Setting */}
+            <div className="space-y-1.5">
+              <Label className="font-serif text-sm font-medium">Diamond Setting</Label>
+              <Select value={watch("diamondSetting") || ""} onValueChange={v => setValue("diamondSetting", v)}>
+                <SelectTrigger className="bg-white/40 border-border/40"><SelectValue placeholder="Select diamond setting" /></SelectTrigger>
+                <SelectContent>
+                  {Object.entries(DIAMOND_SETTINGS).map(([group, options]) => (
+                    <SelectGroup key={group}>
+                      <SelectLabel>{group}</SelectLabel>
+                      {options.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                    </SelectGroup>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Enamel */}
@@ -422,12 +666,46 @@ export default function ModifyPage() {
             {/* Design Shape */}
             <div className="space-y-1.5">
               <Label className="font-serif text-sm font-medium">Design Shape</Label>
-              <Select onValueChange={v => setValue("designShape", v)}>
-                <SelectTrigger><SelectValue placeholder="Select shape" /></SelectTrigger>
-                <SelectContent>
-                  {DESIGN_SHAPES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+              <Select
+                value={watch("designShape") || ""}
+                onValueChange={v => setValue("designShape", v)}
+                disabled={!watchedCategory}
+              >
+                <SelectTrigger><SelectValue placeholder={watchedCategory ? "Select shape" : "Select a category first"} /></SelectTrigger>
+                <SelectContent className="max-h-[200px]">
+                  {availableDesignShapes.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
                 </SelectContent>
               </Select>
+            </div>
+
+            {/* Design Type */}
+            <div className="space-y-1.5">
+              <Label className="font-serif text-sm font-medium">Design Type</Label>
+              <Select value={watch("designType") || ""} onValueChange={v => setValue("designType", v)}>
+                <SelectTrigger className="bg-white/40 border-border/40"><SelectValue placeholder="Select design type" /></SelectTrigger>
+                <SelectContent>
+                  {DESIGN_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Techniques */}
+            <div className="space-y-2">
+              <Label className="font-serif text-sm font-medium">Techniques</Label>
+              <div className="flex flex-wrap gap-3 border border-border/40 rounded-lg p-3 bg-white/40">
+                {TECHNIQUES.map(t => (
+                  <label key={t} className="flex items-center gap-1.5 cursor-pointer">
+                    <Checkbox
+                      checked={watchedTechniques.includes(t)}
+                      onCheckedChange={() => toggleTechnique(t)}
+                    />
+                    <span className="text-xs">{t}</span>
+                  </label>
+                ))}
+              </div>
+              {watchedTechniques.length > 0 && (
+                <p className="text-xs text-muted-foreground">{watchedTechniques.length} technique(s) selected</p>
+              )}
             </div>
 
             {/* Material Ratio */}
@@ -458,7 +736,7 @@ export default function ModifyPage() {
             <div className="space-y-2">
               <Label className="font-serif text-sm font-medium">Gold Purity</Label>
               <div className="flex gap-2">
-                {(["14k", "18k", "22k"] as const).map(k => (
+                {(["9k", "14k", "18k", "22k"] as const).map(k => (
                   <button
                     key={k}
                     type="button"
@@ -564,10 +842,15 @@ export default function ModifyPage() {
           </div>
 
           {result ? (
-            <ResultDisplay
-              result={result}
-              category={getValues("category") || "Modification"}
-            />
+            <div className="space-y-6">
+              {(result.gemini || result.openai || result.grok) && (
+                <MultiModelResult
+                  gemini={result.gemini}
+                  openai={result.openai}
+                  grok={result.grok}
+                />
+              )}
+            </div>
           ) : (
             <div className="flex flex-col items-center justify-center min-h-[400px] border-2 border-dashed border-border/60 rounded-xl bg-white/40 p-8 text-center">
               <OrnamentalDivider className="mb-4" />
@@ -587,7 +870,7 @@ export default function ModifyPage() {
       {result?.costReport && (
         <>
           <OrnamentalDivider className="my-8" />
-          <div className="max-w-7xl mx-auto">
+          <div ref={costReportRef} className="max-w-7xl mx-auto">
             <div className="space-y-2 mb-6">
               <h2 className="text-3xl font-serif text-foreground">Material Cost Breakdown</h2>
               <p className="text-muted-foreground">

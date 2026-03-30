@@ -14,11 +14,34 @@ export const STONE_DATA = {
     { sieve: "2-2.5", size_mm: "1.30", weight: 0.01,  cost: 21000 },
   ],
   colorStone: [
-    { type: "Synthetic", price: 200  },
-    { type: "Morganite", price: 200  },
-    { type: "Emerald",   price: 2000 },
-    { type: "Navratna",  price: 200  },
-    { type: "Ruby",      price: 2000 },
+    { type: "Synthetic",          price: 200  },
+    { type: "Morganite",          price: 600  },
+    { type: "Emerald",            price: 2000 },
+    { type: "Emerald Russian",    price: 3500 },
+    { type: "Emerald Colombian",  price: 6000 },
+    { type: "Navratna",           price: 300  },
+    { type: "Ruby",               price: 2500 },
+    { type: "Ruby Glass Filled",  price: 400  },
+    { type: "Sapphire",           price: 2000 },
+    { type: "Aquamarine",         price: 800  },
+    { type: "Tourmaline",         price: 1000 },
+    { type: "Amethyst",           price: 400  },
+    { type: "Turquoise",          price: 500  },
+    { type: "Tanzanite",          price: 3000 },
+    { type: "Spinel",             price: 1500 },
+    { type: "Opal",               price: 1200 },
+    { type: "Coral",              price: 600  },
+    { type: "Aventurian",         price: 200  },
+    { type: "Beryl",              price: 800  },
+    { type: "Floride",            price: 200  },
+    { type: "Onyx",               price: 300  },
+    { type: "Hydro",              price: 200  },
+    { type: "Green Strawberry",   price: 400  },
+    { type: "Nano Semi Precious", price: 200  },
+    { type: "Pearl",              price: 800  },
+    { type: "Basra Pearl",        price: 5000 },
+    { type: "JKC Pearl",          price: 1200 },
+    { type: "South Sea Pearl",    price: 8000 },
   ],
   emerald: [
     { size_mm: "3x2",   weight: 0.12  },
@@ -29,10 +52,14 @@ export const STONE_DATA = {
 } as const;
 
 export const GOLD_PURITY = {
+  "9k":  9  / 24,
   "14k": 14 / 24,
   "18k": 18 / 24,
   "22k": 22 / 24,
 } as const;
+
+/** Raniwala standard making charge: ₹1,200 per gram of gold */
+export const MAKING_CHARGE_RATE = 1200;
 
 export type GoldPurity = keyof typeof GOLD_PURITY;
 
@@ -48,6 +75,7 @@ export interface CostingInput {
   goldPercentage: number;
   goldRatePerGram: number;
   goldPurity: GoldPurity;
+  goldWeightGrams?: number;   // override: AI-estimated actual gold weight
   polki: PolkiEntry[];
   diamond: DiamondEntry[];
   colorStones: ColorStoneEntry[];
@@ -85,12 +113,13 @@ export interface CostingReport {
   goldBudget: number;
   stoneBudget: number;
   gold: GoldResult;
+  makingCharges: number;        // goldWeight × MAKING_CHARGE_RATE
   polki: PolkiLineItem[];
   diamond: DiamondLineItem[];
   colorStones: ColorStoneLineItem[];
   emeralds: EmeraldLineItem[];
   totalStoneCost: number;
-  totalEstimatedCost: number;
+  totalEstimatedCost: number;   // gold + making + stones
   budgetVariance: number;
   generatedAt: string;
 }
@@ -180,7 +209,13 @@ export function calculateEmeralds(entries: EmeraldEntry[]): EmeraldLineItem[] {
 
 export function generateCostingReport(input: CostingInput): CostingReport {
   const { goldBudget, stoneBudget } = splitBudget(input.totalBudget, input.goldPercentage);
+
+  // Always use budget-driven gold allocation (AI sketch weight is unreliable for manufacturing cost)
   const gold = calculateGold(goldBudget, input.goldRatePerGram, input.goldPurity);
+
+  // Making charges: ₹1,200 per gram (standard Raniwala rate)
+  const makingCharges = Math.round(gold.estimatedWeight * MAKING_CHARGE_RATE);
+
   const polki = calculatePolki(input.polki);
   const diamond = calculateDiamond(input.diamond);
   const colorStones = calculateColorStones(input.colorStones);
@@ -192,11 +227,11 @@ export function generateCostingReport(input: CostingInput): CostingReport {
     colorStones.reduce((s, i) => s + i.totalCost, 0) +
     emeralds.reduce((s, i) => s + i.totalCost, 0);
 
-  const totalEstimatedCost = gold.totalCost + totalStoneCost;
+  const totalEstimatedCost = gold.totalCost + makingCharges + totalStoneCost;
   const budgetVariance = totalEstimatedCost - input.totalBudget;
 
   return {
-    input, goldBudget, stoneBudget, gold,
+    input, goldBudget, stoneBudget, gold, makingCharges,
     polki, diamond, colorStones, emeralds,
     totalStoneCost, totalEstimatedCost, budgetVariance,
     generatedAt: new Date().toISOString(),

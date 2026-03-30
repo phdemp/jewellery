@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Layout } from "@/components/layout";
 import { OrnamentalDivider } from "@/components/ornamental-divider";
 import { DesignForm } from "@/components/design-form";
 import { ResultDisplay } from "@/components/result-display";
+import { MultiModelResult } from "@/components/multi-model-result";
+import { CostReport } from "@/components/cost-report";
 import { DesignRequest } from "@/lib/jewellery-logic";
 import { useToast } from "@/hooks/use-toast";
 import { generateDesign, type DesignGenerationResponse } from "@/lib/api";
@@ -14,6 +16,7 @@ export default function Home() {
   const [lastCategory, setLastCategory] = useState<string>("");
   const [mode, setMode] = useState<"sketch" | "cad">("sketch");
   const { toast } = useToast();
+  const costReportRef = useRef<HTMLDivElement>(null);
 
   const handleGenerate = async (data: DesignRequest, styleOverride?: File) => {
     setIsGenerating(true);
@@ -22,6 +25,9 @@ export default function Home() {
     try {
       const generated = await generateDesign({ ...data, mode }, styleOverride);
       setResult(generated);
+      if (generated.costReport) {
+        setTimeout(() => costReportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
+      }
       const outputLabel = mode === "cad" ? "CAD render" : "sketch";
       toast({
         title: "Design Generated",
@@ -101,9 +107,29 @@ export default function Home() {
               Visualized output and technical generation details.
             </p>
           </div>
+          {(result?.gemini || result?.openai || result?.grok) && (
+            <MultiModelResult
+              gemini={result.gemini}
+              openai={result.openai}
+              grok={result.grok}
+            />
+          )}
           <ResultDisplay result={result} category={lastCategory} />
         </div>
       </div>
+
+      {result?.costReport && (
+        <>
+          <OrnamentalDivider className="my-8" />
+          <div ref={costReportRef} className="max-w-7xl mx-auto">
+            <div className="space-y-2 mb-6">
+              <h2 className="text-3xl font-serif text-foreground">Material Cost Breakdown</h2>
+              <p className="text-muted-foreground">AI-estimated material costs based on the generated design.</p>
+            </div>
+            <CostReport report={result.costReport} />
+          </div>
+        </>
+      )}
     </Layout>
   );
 }
