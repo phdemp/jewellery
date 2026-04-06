@@ -37,7 +37,7 @@ import {
 
 const PRODUCT_SEGMENTS = Object.keys(SEGMENT_CATEGORY_PRICE_MAP);
 
-const POLKI_SIZES = ["Far", "Big", "Medium", "Small"];
+const POLKI_SIZES = ["Any", "Far", "Big", "Medium", "Small"];
 
 const TECHNIQUES = ["Talpe", "Piroyee (Piroi)", "Enamel", "Twisted Wire", "Metal Texture"];
 
@@ -47,7 +47,7 @@ const POLKI_SETTINGS = [
 ];
 
 const MOTIF_CATEGORIES = [
-  "Animal & Bird", "Celestial & Spiritual", "Nature-Inspired",
+  "Any", "Animal & Bird", "Celestial & Spiritual", "Nature-Inspired",
   "Contemporary Luxury", "Forms & Shapes", "Multiple Choice", "No Motifs",
 ];
 
@@ -166,9 +166,11 @@ export default function CadComparison() {
   // Motif groups to display based on selected categories
   const availableMotifGroups = motifCategories.length === 0
     ? []
-    : motifCategories
-        .filter(cat => cat !== "No Motifs" && CAD_MOTIF_GROUPS[cat])
-        .map(cat => ({ group: cat, motifs: CAD_MOTIF_GROUPS[cat] }));
+    : motifCategories.includes("Any")
+      ? Object.entries(CAD_MOTIF_GROUPS).map(([group, motifs]) => ({ group, motifs }))
+      : motifCategories
+          .filter(cat => cat !== "No Motifs" && CAD_MOTIF_GROUPS[cat])
+          .map(cat => ({ group: cat, motifs: CAD_MOTIF_GROUPS[cat] }));
 
   const handleSegmentChange = (value: string) => {
     setProductSegment(value);
@@ -185,18 +187,36 @@ export default function CadComparison() {
 
   const handleMotifCategoryToggle = (cat: string) => {
     setMotifCategories(prev => {
-      const next = prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat];
+      if (prev.includes(cat)) {
+        const next = prev.filter(c => c !== cat);
+        // Clear motifs that are no longer available (unless "Any" is still selected)
+        if (!next.includes("Any")) {
+          const available = new Set(next.flatMap(c => CAD_MOTIF_GROUPS[c] ?? []));
+          setSelectedMotifs(m => m.filter(mot => mot === "Any" || available.has(mot)));
+        }
+        return next;
+      }
+      if (cat === "Any") {
+        return ["Any"];
+      }
+      if (cat === "No Motifs") {
+        setSelectedMotifs([]);
+        return ["No Motifs"];
+      }
+      const next = [...prev.filter(c => c !== "Any" && c !== "No Motifs"), cat];
       // Clear motifs that are no longer available
       const available = new Set(next.flatMap(c => CAD_MOTIF_GROUPS[c] ?? []));
-      setSelectedMotifs(m => m.filter(mot => available.has(mot)));
+      setSelectedMotifs(m => m.filter(mot => mot === "Any" || available.has(mot)));
       return next;
     });
   };
 
   const handleMotifToggle = (motif: string) => {
-    setSelectedMotifs(prev =>
-      prev.includes(motif) ? prev.filter(m => m !== motif) : [...prev, motif]
-    );
+    setSelectedMotifs(prev => {
+      if (prev.includes(motif)) return prev.filter(m => m !== motif);
+      if (motif === "Any") return ["Any"];
+      return [...prev.filter(m => m !== "Any"), motif];
+    });
   };
 
   const handleStoneNameToggle = (name: string) => {
@@ -216,9 +236,11 @@ export default function CadComparison() {
   };
 
   const handlePolkiSizeToggle = (size: string) => {
-    setSelectedPolkiSizes(prev =>
-      prev.includes(size) ? prev.filter(s => s !== size) : [...prev, size]
-    );
+    setSelectedPolkiSizes(prev => {
+      if (prev.includes(size)) return prev.filter(s => s !== size);
+      if (size === "Any") return ["Any"];
+      return [...prev.filter(s => s !== "Any"), size];
+    });
   };
 
   const handleTechniqueToggle = (t: string) => {
@@ -436,7 +458,17 @@ export default function CadComparison() {
                         : "Select motif categories above to see available motifs"}
                     </p>
                   ) : (
-                    availableMotifGroups.map(({ group, motifs }) => (
+                    <>
+                    <div className="pb-2 mb-1 border-b border-border/30">
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <Checkbox
+                          checked={selectedMotifs.includes("Any")}
+                          onCheckedChange={() => handleMotifToggle("Any")}
+                        />
+                        <span className="font-medium">Any — AI's Choice</span>
+                      </label>
+                    </div>
+                    {availableMotifGroups.map(({ group, motifs }) => (
                       <div key={group}>
                         <p className="text-xs font-semibold text-muted-foreground mb-1">{group}</p>
                         <div className="flex flex-wrap gap-1">
@@ -451,7 +483,8 @@ export default function CadComparison() {
                           ))}
                         </div>
                       </div>
-                    ))
+                    ))}
+                    </>
                   )}
                 </div>
                 {selectedMotifs.length > 0 && (
