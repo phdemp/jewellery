@@ -30,7 +30,7 @@ import { useToast } from "@/hooks/use-toast";
 
 const PRODUCT_SEGMENTS = Object.keys(SEGMENT_CATEGORY_PRICE_MAP);
 
-const POLKI_SIZES = ["Far", "Big", "Medium", "Small"];
+const POLKI_SIZES = ["Any", "Far", "Big", "Medium", "Small"];
 
 const TECHNIQUES = ["Talpe", "Piroyee (Piroi)", "Enamel", "Twisted Wire", "Metal Texture"];
 
@@ -40,7 +40,7 @@ const POLKI_SETTINGS = [
 ];
 
 const MOTIF_CATEGORIES = [
-  "Animal & Bird", "Celestial & Spiritual", "Nature-Inspired",
+  "Any", "Animal & Bird", "Celestial & Spiritual", "Nature-Inspired",
   "Contemporary Luxury", "Forms & Shapes", "Multiple Choice", "No Motifs",
 ];
 
@@ -207,24 +207,33 @@ export function DesignForm({ onSubmit, isGenerating }: DesignFormProps) {
   // Compute motif groups to display based on selected categories
   const availableMotifGroups = watchedMotifCats.length === 0
     ? []
-    : watchedMotifCats
-        .filter(cat => cat !== "No Motifs" && MOTIF_GROUPS[cat])
-        .map(cat => ({ group: cat, motifs: MOTIF_GROUPS[cat] }));
+    : watchedMotifCats.includes("Any")
+      ? Object.entries(MOTIF_GROUPS).map(([group, motifs]) => ({ group, motifs }))
+      : watchedMotifCats
+          .filter(cat => cat !== "No Motifs" && MOTIF_GROUPS[cat])
+          .map(cat => ({ group: cat, motifs: MOTIF_GROUPS[cat] }));
 
   // When motif categories change, clear motifs that are no longer available
   useEffect(() => {
+    if (watchedMotifCats.includes("Any")) return; // "Any" category shows all groups — don't clear
     const available = new Set(
       watchedMotifCats.flatMap(cat => MOTIF_GROUPS[cat] ?? [])
     );
     const currentMotifs = getValues("motifs") || [];
-    setValue("motifs", currentMotifs.filter(m => available.has(m)));
+    setValue("motifs", currentMotifs.filter(m => m === "Any" || available.has(m)));
   }, [watchedMotifCats]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Toggle helpers ──────────────────────────────────────────────────────────
 
   function togglePolkiSize(size: string) {
     const curr = getValues("polkiSize") || [];
-    setValue("polkiSize", curr.includes(size) ? curr.filter(s => s !== size) : [...curr, size]);
+    if (curr.includes(size)) {
+      setValue("polkiSize", curr.filter(s => s !== size));
+    } else if (size === "Any") {
+      setValue("polkiSize", ["Any"]);
+    } else {
+      setValue("polkiSize", [...curr.filter(s => s !== "Any"), size]);
+    }
   }
 
   function toggleTechnique(t: string) {
@@ -234,12 +243,26 @@ export function DesignForm({ onSubmit, isGenerating }: DesignFormProps) {
 
   function toggleMotifCategory(cat: string) {
     const curr = getValues("motifCategory") || [];
-    setValue("motifCategory", curr.includes(cat) ? curr.filter(c => c !== cat) : [...curr, cat]);
+    if (curr.includes(cat)) {
+      setValue("motifCategory", curr.filter(c => c !== cat));
+    } else if (cat === "Any") {
+      setValue("motifCategory", ["Any"]);
+    } else if (cat === "No Motifs") {
+      setValue("motifCategory", ["No Motifs"]);
+    } else {
+      setValue("motifCategory", [...curr.filter(c => c !== "Any" && c !== "No Motifs"), cat]);
+    }
   }
 
   function toggleMotif(motif: string) {
     const curr = getValues("motifs") || [];
-    setValue("motifs", curr.includes(motif) ? curr.filter(m => m !== motif) : [...curr, motif]);
+    if (curr.includes(motif)) {
+      setValue("motifs", curr.filter(m => m !== motif));
+    } else if (motif === "Any") {
+      setValue("motifs", ["Any"]);
+    } else {
+      setValue("motifs", [...curr.filter(m => m !== "Any"), motif]);
+    }
   }
 
   function toggleStoneName(name: string) {
@@ -433,7 +456,18 @@ export function DesignForm({ onSubmit, isGenerating }: DesignFormProps) {
                     : "Select motif categories above to see available motifs"}
                 </p>
               ) : (
-                availableMotifGroups.map(({ group, motifs }) => (
+                <>
+                <div className="pb-2 mb-2 border-b border-border/30">
+                  <label className="flex items-center gap-2 rounded-md border border-transparent hover:bg-secondary/20 p-1.5 transition-colors cursor-pointer">
+                    <Checkbox
+                      checked={watchedMotifs.includes("Any")}
+                      onCheckedChange={() => toggleMotif("Any")}
+                      className="border-primary/40 data-[state=checked]:bg-primary data-[state=checked]:border-primary"
+                    />
+                    <span className="text-sm font-medium">Any — AI's Choice</span>
+                  </label>
+                </div>
+                {availableMotifGroups.map(({ group, motifs }) => (
                   <div key={group}>
                     <p className="text-xs font-medium text-muted-foreground mb-1.5 uppercase tracking-wide">{group}</p>
                     <div className="flex flex-wrap gap-2">
@@ -449,7 +483,8 @@ export function DesignForm({ onSubmit, isGenerating }: DesignFormProps) {
                       ))}
                     </div>
                   </div>
-                ))
+                ))}
+                </>
               )}
             </div>
             {watchedMotifs.length > 0 && (

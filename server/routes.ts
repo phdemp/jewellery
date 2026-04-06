@@ -622,9 +622,17 @@ export async function registerRoutes(
       if (productSegment) extras.product_segment = productSegment;
       if (priceBand) extras.price_band = priceBand;
       if (priceBandGuidance) extras.budget_guidance = priceBandGuidance;
-      if (polkiSizes.length > 0) extras.polki_size = polkiSizes.map(s => POLKI_SIZE_DESCRIPTIONS[s] || s).join(" | ");
+      if (polkiSizes.length > 0) {
+        extras.polki_size = polkiSizes.includes("Any")
+          ? "AI's choice — select the most aesthetically appropriate polki size(s) and mix for this design. You may use any combination of Far (massive), Big, Medium, or Small polki."
+          : polkiSizes.map(s => POLKI_SIZE_DESCRIPTIONS[s] || s).join(" | ");
+      }
       if (polkiSetting) extras.polki_setting = polkiSetting;
-      if (motifCategories.length > 0) extras.motif_category = motifCategories;
+      if (motifCategories.length > 0) {
+        extras.motif_category = motifCategories.includes("Any")
+          ? "AI's choice — freely select the most fitting motif category and motifs for this design"
+          : motifCategories;
+      }
       if (stoneNameColour.length > 0) extras.stone_colors = stoneNameColour;
       if (stoneShape) extras.stone_shape = stoneShape;
       if (stoneSetting) extras.stone_setting = stoneSetting;
@@ -640,10 +648,13 @@ export async function registerRoutes(
       if (piroiColour && piroiColour !== "None") extras.piroi_colour = piroiColour;
 
       // Build context with brand rules and similar designs
+      const resolvedMotifs = motifs.includes("Any")
+        ? ["AI's choice — select the most aesthetically appropriate motifs for this design"]
+        : validatedData.motifs;
       const context: DesignContext = {
         category: validatedData.category,
         theme: productSegment || "Modern",
-        motifs: validatedData.motifs,
+        motifs: resolvedMotifs,
         stones: stoneName,
         materialRatio: validatedData.materialRatio,
         customNotes: validatedData.customNotes ?? undefined,
@@ -1295,8 +1306,14 @@ export async function registerRoutes(
       // Build edit prompt — only include non-empty fields
       const modifyPolkiSizes: string[] = req.body.polkiSize ? (typeof req.body.polkiSize === "string" ? (() => { try { return JSON.parse(req.body.polkiSize); } catch { return []; } })() : req.body.polkiSize) : [];
       const modifyPolkiConstraint = modifyPolkiSizes.length > 0
-        ? `CRITICAL — MANDATORY POLKI STONE SIZE (OVERRIDES ALL OTHER INSTRUCTIONS INCLUDING BUDGET TIER SIEVE SIZES):\nYou MUST use ONLY this polki stone size throughout the modified design:\n${modifyPolkiSizes.map(s => `  • ${POLKI_SIZE_DESCRIPTIONS[s] || s}`).join("\n")}`
+        ? modifyPolkiSizes.includes("Any")
+          ? `POLKI STONE SIZE: AI's choice — select the most aesthetically appropriate polki size(s) and mix for this design. You may use any combination of Far (massive), Big, Medium, or Small polki.`
+          : `CRITICAL — MANDATORY POLKI STONE SIZE (OVERRIDES ALL OTHER INSTRUCTIONS INCLUDING BUDGET TIER SIEVE SIZES):\nYou MUST use ONLY this polki stone size throughout the modified design:\n${modifyPolkiSizes.map(s => `  • ${POLKI_SIZE_DESCRIPTIONS[s] || s}`).join("\n")}`
         : "";
+
+      // Parse motif category for "Any" handling
+      let modifyMotifCategories: string[] = [];
+      try { const mc = req.body.motifCategory; if (mc) { try { modifyMotifCategories = JSON.parse(mc); } catch { modifyMotifCategories = [mc]; } } } catch { modifyMotifCategories = []; }
 
       const lines: string[] = ["Modify this jewellery design according to the following specifications:\n"];
       if (req.body.productSegment) lines.push(`Product Segment: ${req.body.productSegment}`);
@@ -1307,8 +1324,12 @@ export async function registerRoutes(
       }
       const modifyTechniques: string[] = req.body.techniques ? (typeof req.body.techniques === "string" ? (() => { try { return JSON.parse(req.body.techniques); } catch { return []; } })() : req.body.techniques) : [];
       if (req.body.polkiSetting) lines.push(`Polki Setting Style: ${req.body.polkiSetting}`);
-      if (req.body.motifCategory) lines.push(`Motif Category: ${req.body.motifCategory}`);
-      if (motifs.length > 0) lines.push(`Motifs: ${motifs.join(", ")}`);
+      if (modifyMotifCategories.length > 0) {
+        lines.push(`Motif Category: ${modifyMotifCategories.includes("Any") ? "AI's choice — freely select the most fitting motif category" : modifyMotifCategories.join(", ")}`);
+      }
+      if (motifs.length > 0) {
+        lines.push(`Motifs: ${motifs.includes("Any") ? "AI's choice — select the most aesthetically appropriate motifs" : motifs.join(", ")}`);
+      }
       if (stoneName.length > 0) lines.push(`Stone Names: ${stoneName.join(", ")}`);
       if (stoneNameColour.length > 0) lines.push(`Stone Name Colours: ${stoneNameColour.join(", ")}`);
       if (req.body.stoneShape) lines.push(`Stone Shape: ${req.body.stoneShape}`);
@@ -1483,10 +1504,13 @@ export async function registerRoutes(
         customNotes,
       });
 
+      const cadResolvedMotifs = (Array.isArray(motifs) && motifs.includes("Any"))
+        ? ["AI's choice — select the most aesthetically appropriate motifs for this design"]
+        : validatedData.motifs;
       const context: DesignContext = {
         category: validatedData.category,
         theme: validatedData.theme,
-        motifs: validatedData.motifs,
+        motifs: cadResolvedMotifs,
         stones: cadStoneNames,
         materialRatio: validatedData.materialRatio,
         customNotes: validatedData.customNotes ?? undefined,
@@ -1502,9 +1526,17 @@ export async function registerRoutes(
       const cadExtras: Record<string, string | string[]> = {};
       if (priceBand) cadExtras.price_band = priceBand as string;
       if (cadPriceBandGuidance) cadExtras.budget_guidance = cadPriceBandGuidance;
-      if (cadPolkiSizes.length > 0) cadExtras.polki_size = cadPolkiSizes.map(s => POLKI_SIZE_DESCRIPTIONS[s] || s).join(" | ");
+      if (cadPolkiSizes.length > 0) {
+        cadExtras.polki_size = cadPolkiSizes.includes("Any")
+          ? "AI's choice — select the most aesthetically appropriate polki size(s) and mix for this design. You may use any combination of Far (massive), Big, Medium, or Small polki."
+          : cadPolkiSizes.map(s => POLKI_SIZE_DESCRIPTIONS[s] || s).join(" | ");
+      }
       if (cadPolkiSetting) cadExtras.polki_setting = cadPolkiSetting;
-      if (cadMotifCategories.length > 0) cadExtras.motif_category = cadMotifCategories;
+      if (cadMotifCategories.length > 0) {
+        cadExtras.motif_category = cadMotifCategories.includes("Any")
+          ? "AI's choice — freely select the most fitting motif category and motifs for this design"
+          : cadMotifCategories;
+      }
       if (cadStoneColours.length > 0) cadExtras.stone_colors = cadStoneColours;
       if (stoneShape) cadExtras.stone_shape = stoneShape as string;
       if (cadStoneSetting) cadExtras.stone_setting = cadStoneSetting;
@@ -1846,9 +1878,17 @@ export async function registerRoutes(
       if (productSegment) extras.product_segment = productSegment;
       if (priceBand) extras.price_band = priceBand;
       if (priceBandGuidance) extras.budget_guidance = priceBandGuidance;
-      if (polkiSizes.length > 0) extras.polki_size = polkiSizes.map(s => POLKI_SIZE_DESCRIPTIONS[s] || s).join(" | ");
+      if (polkiSizes.length > 0) {
+        extras.polki_size = polkiSizes.includes("Any")
+          ? "AI's choice — select the most aesthetically appropriate polki size(s) and mix for this design. You may use any combination of Far (massive), Big, Medium, or Small polki."
+          : polkiSizes.map(s => POLKI_SIZE_DESCRIPTIONS[s] || s).join(" | ");
+      }
       if (polkiSetting) extras.polki_setting = polkiSetting;
-      if (motifCategories.length > 0) extras.motif_category = motifCategories;
+      if (motifCategories.length > 0) {
+        extras.motif_category = motifCategories.includes("Any")
+          ? "AI's choice — freely select the most fitting motif category and motifs for this design"
+          : motifCategories;
+      }
       if (stoneNameColour.length > 0) extras.stone_colors = stoneNameColour;
       if (stoneShape) extras.stone_shape = stoneShape;
       if (stoneSetting) extras.stone_setting = stoneSetting;
@@ -1864,10 +1904,13 @@ export async function registerRoutes(
       if (piroiColour && piroiColour !== "None") extras.piroi_colour = piroiColour;
 
       // Build context and image prompt (same logic as generate-design, no RAG)
+      const debugResolvedMotifs = motifs.includes("Any")
+        ? ["AI's choice — select the most aesthetically appropriate motifs for this design"]
+        : motifs;
       const context: DesignContext = {
         category,
         theme: productSegment || "Modern",
-        motifs,
+        motifs: debugResolvedMotifs,
         stones: stoneName,
         materialRatio,
         customNotes,

@@ -18,7 +18,7 @@ import { CostReport } from "@/components/cost-report";
 
 const PRODUCT_SEGMENTS = Object.keys(SEGMENT_CATEGORY_PRICE_MAP);
 
-const POLKI_SIZES = ["Far", "Big", "Medium", "Small"];
+const POLKI_SIZES = ["Any", "Far", "Big", "Medium", "Small"];
 
 const TECHNIQUES = ["Talpe", "Piroyee (Piroi)", "Enamel", "Twisted Wire", "Metal Texture"];
 
@@ -28,6 +28,7 @@ const POLKI_SETTINGS = [
 ];
 
 const MOTIF_CATEGORIES = [
+  "Any",
   "Animal & Bird",
   "Celestial & Spiritual",
   "Nature-Inspired",
@@ -224,7 +225,13 @@ export default function ModifyPage() {
 
   function togglePolkiSize(size: string) {
     const current = getValues("polkiSize") || [];
-    setValue("polkiSize", current.includes(size) ? current.filter(s => s !== size) : [...current, size]);
+    if (current.includes(size)) {
+      setValue("polkiSize", current.filter(s => s !== size));
+    } else if (size === "Any") {
+      setValue("polkiSize", ["Any"]);
+    } else {
+      setValue("polkiSize", [...current.filter(s => s !== "Any"), size]);
+    }
   }
 
   function toggleTechnique(t: string) {
@@ -234,28 +241,44 @@ export default function ModifyPage() {
 
   function toggleMotifCategory(cat: string) {
     const current = getValues("motifCategory") || [];
-    const next = current.includes(cat) ? current.filter(c => c !== cat) : [...current, cat];
-    setValue("motifCategory", next);
+    if (current.includes(cat)) {
+      setValue("motifCategory", current.filter(c => c !== cat));
+    } else if (cat === "Any") {
+      setValue("motifCategory", ["Any"]);
+    } else if (cat === "No Motifs") {
+      setValue("motifCategory", ["No Motifs"]);
+    } else {
+      setValue("motifCategory", [...current.filter(c => c !== "Any" && c !== "No Motifs"), cat]);
+    }
   }
 
   useEffect(() => {
+    if (watchedMotifCategories.includes("Any")) return; // "Any" category shows all groups — don't clear
     const available = new Set(
       watchedMotifCategories.flatMap(cat => MOTIF_GROUPS[cat] ?? [])
     );
     const currentMotifs = getValues("motifs") || [];
-    setValue("motifs", currentMotifs.filter(m => available.has(m)));
+    setValue("motifs", currentMotifs.filter(m => m === "Any" || available.has(m)));
   }, [watchedMotifCategories]);
 
   // Compute motif groups to display based on selected categories
   const availableMotifGroups = watchedMotifCategories.length === 0
     ? []
-    : watchedMotifCategories
-        .filter(cat => cat !== "No Motifs" && MOTIF_GROUPS[cat])
-        .map(cat => ({ group: cat, motifs: MOTIF_GROUPS[cat] }));
+    : watchedMotifCategories.includes("Any")
+      ? Object.entries(MOTIF_GROUPS).map(([group, motifs]) => ({ group, motifs }))
+      : watchedMotifCategories
+          .filter(cat => cat !== "No Motifs" && MOTIF_GROUPS[cat])
+          .map(cat => ({ group: cat, motifs: MOTIF_GROUPS[cat] }));
 
   function toggleMotif(motif: string) {
     const current = getValues("motifs") || [];
-    setValue("motifs", current.includes(motif) ? current.filter(m => m !== motif) : [...current, motif]);
+    if (current.includes(motif)) {
+      setValue("motifs", current.filter(m => m !== motif));
+    } else if (motif === "Any") {
+      setValue("motifs", ["Any"]);
+    } else {
+      setValue("motifs", [...current.filter(m => m !== "Any"), motif]);
+    }
   }
 
   function toggleStoneName(name: string) {
@@ -527,7 +550,17 @@ export default function ModifyPage() {
                       : "Select motif categories above to see available motifs"}
                   </p>
                 ) : (
-                  availableMotifGroups.map(({ group, motifs }) => (
+                  <>
+                  <div className="pb-2 mb-2 border-b border-border/30">
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <Checkbox
+                        checked={watchedMotifs.includes("Any")}
+                        onCheckedChange={() => toggleMotif("Any")}
+                      />
+                      <span className="text-xs font-medium">Any — AI's Choice</span>
+                    </label>
+                  </div>
+                  {availableMotifGroups.map(({ group, motifs }) => (
                     <div key={group}>
                       <p className="text-xs font-medium text-muted-foreground mb-1.5 uppercase tracking-wide">{group}</p>
                       <div className="flex flex-wrap gap-2">
@@ -542,7 +575,8 @@ export default function ModifyPage() {
                         ))}
                       </div>
                     </div>
-                  ))
+                  ))}
+                  </>
                 )}
               </div>
               {watchedMotifs.length > 0 && (
