@@ -693,6 +693,14 @@ export default function References() {
                             : ref.themeCode}
                         </Badge>
                       )}
+                      {ref.analysis?.pieceType && (
+                        <Badge
+                          className="absolute bottom-2 left-2 bg-primary/80 text-primary-foreground text-xs"
+                          variant="default"
+                        >
+                          {ref.analysis.pieceType}
+                        </Badge>
+                      )}
                     </div>
                     <CardContent className="p-3">
                       <p className="text-sm font-medium truncate">{ref.filename}</p>
@@ -776,6 +784,13 @@ export default function References() {
                       {selectedReference.analysis?.structure || 'No structure analysis available'}
                     </p>
                   </div>
+
+                  {selectedReference.analysis?.pieceType && (
+                    <div>
+                      <h4 className="text-sm font-medium mb-2">Piece Type</h4>
+                      <Badge variant="outline">{selectedReference.analysis.pieceType}</Badge>
+                    </div>
+                  )}
                 </div>
                 <DialogFooter>
                   <Button

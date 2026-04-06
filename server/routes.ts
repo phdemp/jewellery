@@ -1,9 +1,10 @@
+import * as Sentry from "@sentry/node";
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
 import { referenceImages } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import multer from "multer";
 import path from "path";
 import fs from "fs/promises";
@@ -20,7 +21,7 @@ import {
   editJewellerySketch,
   modifyJewelleryImage,
   buildDesignContext,
-  buildImagePrompt,
+  buildImagePromptJSON,
   type DesignContext,
   type MaterialBreakdown,
   buildMarketingPrompt,
@@ -35,6 +36,8 @@ import {
 import { addVector, searchSimilarVectors, clearVectorStore, migrateJsonToVector } from "./vector-store";
 import { insertDesignProjectSchema, insertReferenceImageSchema, driveImportRequestSchema, designProjectInputSchema, THEME_CODES } from "@shared/schema";
 import { extractFolderId, listImagesInFolder, downloadImage } from "./google-drive";
+import { searchSimilarStockItems } from "./stock-vector-store";
+import { read as xlsxRead, utils as xlsxUtils } from "xlsx";
 
 // Configure multer for file uploads (disk storage for reference images)
 const diskStorage = multer.diskStorage({
@@ -83,6 +86,7 @@ const DESIGN_IMAGE_SEGMENT_MAP: Record<string, string> = {
   'RTW':              'RTW',
   'Ear Esssentials':  'Ear Essentials',  // note the 3-s typo in folder name
   'Handwear':         'Handwear',
+  'Add-ons':          'Add-ons',
 };
 
 // Parse theme code from filename: FQBRP04499CHS.JPG → "BRP"
@@ -94,12 +98,43 @@ function parseThemeCodeFromFilename(filename: string): string | null {
   return codeMap[code] ?? code;
 }
 
+// Suffix → piece type mapping (ordered longest-first so NLSE matches before NLS)
+const PIECE_TYPE_SUFFIX_MAP: Record<string, string> = {
+  'NLSE': 'Necklace Set Earring',
+  'NLS':  'Necklace Set',
+  'CHSE': 'Choker Set Earring',
+  'CHS':  'Choker Set',
+  'LNSE': 'Long Necklace Set Earring',
+  'LNS':  'Long Necklace Set',
+  'PNSE': 'Pendant Set Earring',
+  'PN':   'Pendant',
+  'ER':   'Earring',
+  'NL':   'Necklace',
+  'CN':   'Choker Necklace',
+  'LN':   'Long Necklace',
+  'BR':   'Bracelet',
+  'RN':   'Ring',
+  'MT':   'Maangtika',
+  'KN':   'Kanauti',
+  'M':    'Mala',
+};
+
+// Parse piece type from filename suffix: OQCLO00878NLS.jpg → "Necklace Set"
+function parsePieceTypeFromFilename(filename: string): string | null {
+  const base = filename.replace(/\.[^.]+$/, '').replace(/[-\s]\d+$/, '').toUpperCase();
+  for (const [suffix, label] of Object.entries(PIECE_TYPE_SUFFIX_MAP)) {
+    if (base.endsWith(suffix)) return label;
+  }
+  return null;
+}
+
 interface DesignImageFile {
   sourcePath:     string;
   filename:       string;
   productSegment: string;
   category:       string;
   themeCode:      string | null;
+  pieceType:      string | null;
 }
 
 // In-memory state for background import job
@@ -139,6 +174,7 @@ async function runDesignImageImport(files: DesignImageFile[]): Promise<void> {
           productSegment: file.productSegment,
           category:       file.category,
           themeCode:      file.themeCode,
+          pieceType:      file.pieceType,
         };
 
         const ref = await storage.createReferenceImage({
@@ -307,6 +343,29 @@ function buildCADPrompt(context: DesignContext): string {
   return `${CAD_RULES}\n\nDESIGN SPECIFICATIONS:\n${parts.join("\n")}`;
 }
 
+/** JSON-structured CAD prompt — compact alternative to buildCADPrompt + extraSpecs concat. */
+function buildCADPromptJSON(
+  context: DesignContext,
+  extras: Record<string, string | string[]> = {}
+): string {
+  const spec: Record<string, unknown> = {
+    category: context.category,
+    theme: context.theme,
+  };
+  if (context.motifs?.length) spec.motifs = context.motifs;
+  if (context.stones?.length) spec.stones = context.stones;
+  if (context.materialRatio) spec.material_ratio = context.materialRatio;
+  if (context.customNotes) spec.notes = context.customNotes;
+
+  for (const [key, val] of Object.entries(extras)) {
+    if (Array.isArray(val) ? val.length > 0 : val?.trim()) {
+      spec[key] = val;
+    }
+  }
+
+  return `${CAD_RULES}\n\nDESIGN SPECIFICATION:\n${JSON.stringify(spec)}\n\nRender the complete jewellery piece. Every element must be fully visible within frame with at least 15% margin on all sides.`;
+}
+
 /** Extract first successful URL from allSettled results, in priority order. */
 function firstSuccessfulUrl(results: PromiseSettledResult<string>[]): string | null {
   for (const r of results) {
@@ -402,6 +461,7 @@ export async function registerRoutes(
         analysis
       });
     } catch (error: any) {
+      Sentry.captureException(error);
       console.error("Error uploading reference image:", error);
       res.status(500).json({ error: error.message });
     }
@@ -530,21 +590,21 @@ export async function registerRoutes(
         similarDesigns = similarResults.map(result => result.metadata);
       }
 
-      // Build extra specs string from extended fields
+      // Build extra specs for sketchPlan text display
+      const polkiSetting: string = req.body.polkiSetting || "";
+      const stoneSetting: string = req.body.stoneSetting || "";
+      const diamondSetting: string = req.body.diamondSetting || "";
       const extraSpecs: string[] = [];
       if (priceBand) {
         const bandGuidance = PRICE_BAND_DESIGN_GUIDANCE[priceBand];
         extraSpecs.push(`Price Band: ${priceBand}${bandGuidance ? `\n${bandGuidance}` : ""}`);
       }
-      const polkiSetting: string = req.body.polkiSetting || "";
       if (polkiSetting) extraSpecs.push(`Polki Setting Style: ${polkiSetting}`);
       if (motifCategories.length > 0) extraSpecs.push(`Motif Category: ${motifCategories.join(", ")}`);
       if (stoneName.length > 0) extraSpecs.push(`Stone Names: ${stoneName.join(", ")}`);
       if (stoneNameColour.length > 0) extraSpecs.push(`Stone Colours: ${stoneNameColour.join(", ")}`);
       if (stoneShape) extraSpecs.push(`Stone Shape: ${stoneShape}`);
-      const stoneSetting: string = req.body.stoneSetting || "";
       if (stoneSetting) extraSpecs.push(`Stone Setting: ${stoneSetting}`);
-      const diamondSetting: string = req.body.diamondSetting || "";
       if (diamondSetting) extraSpecs.push(`Diamond Setting: ${diamondSetting}`);
       if (enamel) extraSpecs.push(`Enamel: ${enamel}`);
       if (finish) extraSpecs.push(`Finish: ${finish}`);
@@ -555,7 +615,29 @@ export async function registerRoutes(
       if (talaf && talaf !== "None") extraSpecs.push(`Talaf: ${talaf}`);
       if (piroiPlacement && piroiPlacement !== "None") extraSpecs.push(`Piroi Placement: ${piroiPlacement}`);
       if (piroiColour && piroiColour !== "None") extraSpecs.push(`Piroi Colour: ${piroiColour}`);
-      const extraSpecsStr = extraSpecs.length > 0 ? "\n\nAdditional Specifications:\n" + extraSpecs.join("\n") : "";
+
+      // Build extras for JSON prompt (polki size uses full POLKI_SIZE_DESCRIPTIONS)
+      const priceBandGuidance = priceBand ? PRICE_BAND_DESIGN_GUIDANCE[priceBand] || "" : "";
+      const extras: Record<string, string | string[]> = {};
+      if (productSegment) extras.product_segment = productSegment;
+      if (priceBand) extras.price_band = priceBand;
+      if (priceBandGuidance) extras.budget_guidance = priceBandGuidance;
+      if (polkiSizes.length > 0) extras.polki_size = polkiSizes.map(s => POLKI_SIZE_DESCRIPTIONS[s] || s).join(" | ");
+      if (polkiSetting) extras.polki_setting = polkiSetting;
+      if (motifCategories.length > 0) extras.motif_category = motifCategories;
+      if (stoneNameColour.length > 0) extras.stone_colors = stoneNameColour;
+      if (stoneShape) extras.stone_shape = stoneShape;
+      if (stoneSetting) extras.stone_setting = stoneSetting;
+      if (diamondSetting) extras.diamond_setting = diamondSetting;
+      if (enamel) extras.enamel = enamel;
+      if (finish) extras.finish = finish;
+      if (designShape) extras.design_shape = designShape;
+      if (designType) extras.design_type = designType;
+      if (techniques.length > 0) extras.techniques = techniques;
+      if (earringStyle) extras.earring_style = earringStyle;
+      if (talaf && talaf !== "None") extras.talaf = talaf;
+      if (piroiPlacement && piroiPlacement !== "None") extras.piroi_placement = piroiPlacement;
+      if (piroiColour && piroiColour !== "None") extras.piroi_colour = piroiColour;
 
       // Build context with brand rules and similar designs
       const context: DesignContext = {
@@ -598,8 +680,8 @@ export async function registerRoutes(
         sketchPlan += `\n**Informed by ${similarDesigns.length} similar reference design(s) from library**\n`;
       }
 
-      // Generate condensed image prompt for Gemini (under 4000 chars)
-      const imagePrompt = buildImagePrompt(context) + extraSpecsStr;
+      // Generate JSON-structured image prompt
+      const imagePrompt = buildImagePromptJSON(context, extras);
 
       // Generate images from all 3 models in parallel
       const isPortrait = PORTRAIT_CATEGORIES.some(c =>
@@ -622,13 +704,10 @@ export async function registerRoutes(
         }
       };
 
-      const polkiSizeConstraint = polkiSizes.length > 0
-        ? `CRITICAL — MANDATORY POLKI STONE SIZE (OVERRIDES ALL OTHER INSTRUCTIONS INCLUDING BUDGET TIER SIEVE SIZES):\nThe designer has specified the EXACT polki stone size. You MUST use ONLY this size:\n${polkiSizes.map(s => `  • ${POLKI_SIZE_DESCRIPTIONS[s] || s}`).join("\n")}\nThis is REQUIRED. Do not draw default or medium-sized polki. Stone size compliance is mandatory.`
-        : "";
-
       const [geminiResult, openaiResult, grokResult] = await (async () => {
         if (mode === "cad") {
-          const cadPrompt = polkiSizeConstraint + buildCADPrompt(context) + extraSpecsStr;
+          // CAD mode: JSON spec prefixed with CAD_RULES (polki size is inside the JSON spec)
+          const cadPrompt = buildCADPromptJSON(context, extras);
           console.log(`[generate-design] CAD PROMPT (${cadPrompt.length} chars):\n${"═".repeat(80)}\n${cadPrompt}\n${"═".repeat(80)}`);
           return Promise.allSettled([
             timedGenerate("Gemini", () => generateJewellerySketch(cadPrompt)),
@@ -636,13 +715,10 @@ export async function registerRoutes(
             timedGenerate("Grok", () => generateImageWithGrok(cadPrompt, grokAspect)),
           ]);
         } else {
-          // Non-CAD sketch mode: sandwich polkiSizeConstraint (first + last) so LLM
-          // reads it before all other rules and again as final instruction.
-          const sizeHeader = polkiSizeConstraint ? polkiSizeConstraint + "\n\n" : "";
-          const fullPrompt = sizeHeader + BRAND_RULES + "\n\n" + imagePrompt + (polkiSizeConstraint ? "\n\n" + polkiSizeConstraint : "");
-          // Grok has an 8000-char prompt limit — use condensed preamble instead of full BRAND_RULES.
-          // imagePrompt already contains all design-specific constraints.
-          const grokPrompt = sizeHeader + GROK_SKETCH_PREAMBLE + "\n\n" + imagePrompt + (polkiSizeConstraint ? "\n\n" + polkiSizeConstraint : "");
+          // Sketch mode: JSON spec prefixed with BRAND_RULES (polki size is inside the JSON spec)
+          const fullPrompt = `${BRAND_RULES}\n\n${imagePrompt}`;
+          // Grok: use condensed preamble instead of full BRAND_RULES (8000-char limit)
+          const grokPrompt = `${GROK_SKETCH_PREAMBLE}\n\n${imagePrompt}`;
           console.log(`[generate-design] FULL PROMPT (${fullPrompt.length} chars), GROK PROMPT (${grokPrompt.length} chars):\n${"═".repeat(80)}\n${fullPrompt}\n${"═".repeat(80)}`);
           return Promise.allSettled([
             timedGenerate("Gemini", () => generateJewellerySketch(fullPrompt)),
@@ -713,6 +789,7 @@ export async function registerRoutes(
         grok: toModelResult(grokResult, "grok-imagine-image"),
       });
     } catch (error: any) {
+      Sentry.captureException(error);
       console.error("Error generating design:", error);
       res.status(500).json({ error: error.message });
     }
@@ -768,8 +845,8 @@ export async function registerRoutes(
       };
 
       // Build prompts for both
-      const promptWithRefs = buildImagePrompt(contextWithRefs);
-      const promptWithoutRefs = buildImagePrompt(contextWithoutRefs);
+      const promptWithRefs = buildImagePromptJSON(contextWithRefs);
+      const promptWithoutRefs = buildImagePromptJSON(contextWithoutRefs);
 
       // Generate both images in parallel
       const [imageWithRefs, imageWithoutRefs] = await Promise.all([
@@ -880,6 +957,7 @@ export async function registerRoutes(
         resultImageUrl: iteration.resultImageUrl,
       });
     } catch (error: any) {
+      Sentry.captureException(error);
       console.error("Error editing design:", error);
       res.status(500).json({ error: error.message });
     }
@@ -1367,6 +1445,7 @@ export async function registerRoutes(
         grok: toModelResult(grokResult, "grok-imagine-image"),
       });
     } catch (error: any) {
+      Sentry.captureException(error);
       console.error("Error modifying design:", error);
       res.status(500).json({ error: error.message });
     }
@@ -1414,44 +1493,32 @@ export async function registerRoutes(
         similarDesigns: [],
       };
 
-      let cadPrompt = buildCADPrompt(context);
-
-      // Append additional specifications
-      const extraSpecs: string[] = [];
-      if (priceBand) {
-        const cadBandGuidance = PRICE_BAND_DESIGN_GUIDANCE[priceBand as string];
-        extraSpecs.push(`Price band: ${priceBand}${cadBandGuidance ? `\n${cadBandGuidance}` : ""}`);
-      }
+      // Build extras for JSON CAD prompt (polki size uses full POLKI_SIZE_DESCRIPTIONS)
       const cadPolkiSizes: string[] = Array.isArray(polkiSize) ? polkiSize : (polkiSize ? [polkiSize] : []);
       const cadPolkiSetting: string = reqPolkiSetting || "";
-      if (cadPolkiSetting) extraSpecs.push(`Polki setting style: ${cadPolkiSetting}`);
-      if (cadMotifCategories.length > 0) extraSpecs.push(`Motif category: ${cadMotifCategories.join(", ")}`);
-      if (cadStoneNames.length > 0) extraSpecs.push(`Stone names: ${cadStoneNames.join(", ")}`);
-      if (cadStoneColours.length > 0) extraSpecs.push(`Stone colours: ${cadStoneColours.join(", ")}`);
-      if (stoneShape) extraSpecs.push(`Stone shape: ${stoneShape}`);
       const cadStoneSetting: string = reqStoneSetting || "";
-      if (cadStoneSetting) extraSpecs.push(`Stone setting: ${cadStoneSetting}`);
       const cadDiamondSetting: string = reqDiamondSetting || "";
-      if (cadDiamondSetting) extraSpecs.push(`Diamond setting: ${cadDiamondSetting}`);
-      if (cadMaterialRatio && cadMaterialRatio !== "Gold Intensive") extraSpecs.push(`Material ratio: ${cadMaterialRatio}`);
-      if (enamel) extraSpecs.push(`Enamel: ${enamel}`);
-      if (finish) extraSpecs.push(`Finish: ${finish}`);
-      if (designShape) extraSpecs.push(`Design shape: ${designShape}`);
-      if (cadDesignType) extraSpecs.push(`Design type: ${cadDesignType}`);
-      if (cadTechniques.length > 0) extraSpecs.push(`Techniques: ${cadTechniques.join(", ")}`);
-      if (earringStyle) extraSpecs.push(`Earring style: ${earringStyle}`);
-      if (talaf) extraSpecs.push(`Talaf: ${talaf}`);
-      if (piroiPlacement) extraSpecs.push(`Piroi placement: ${piroiPlacement}`);
-      if (piroiColour) extraSpecs.push(`Piroi colour: ${piroiColour}`);
-
-      if (extraSpecs.length > 0) {
-        cadPrompt += "\n" + extraSpecs.join("\n");
-      }
-
-      const cadPolkiConstraint = cadPolkiSizes.length > 0
-        ? `CRITICAL — MANDATORY POLKI STONE SIZE:\nThe designer has specified the EXACT polki stone size. You MUST use ONLY this size:\n${cadPolkiSizes.map(s => `  • ${POLKI_SIZE_DESCRIPTIONS[s] || s}`).join("\n")}\nThis is REQUIRED. Do not draw default or medium-sized polki. Stone size compliance is mandatory.\n\n`
-        : "";
-      cadPrompt = cadPolkiConstraint + cadPrompt;
+      const cadPriceBandGuidance = priceBand ? PRICE_BAND_DESIGN_GUIDANCE[priceBand as string] || "" : "";
+      const cadExtras: Record<string, string | string[]> = {};
+      if (priceBand) cadExtras.price_band = priceBand as string;
+      if (cadPriceBandGuidance) cadExtras.budget_guidance = cadPriceBandGuidance;
+      if (cadPolkiSizes.length > 0) cadExtras.polki_size = cadPolkiSizes.map(s => POLKI_SIZE_DESCRIPTIONS[s] || s).join(" | ");
+      if (cadPolkiSetting) cadExtras.polki_setting = cadPolkiSetting;
+      if (cadMotifCategories.length > 0) cadExtras.motif_category = cadMotifCategories;
+      if (cadStoneColours.length > 0) cadExtras.stone_colors = cadStoneColours;
+      if (stoneShape) cadExtras.stone_shape = stoneShape as string;
+      if (cadStoneSetting) cadExtras.stone_setting = cadStoneSetting;
+      if (cadDiamondSetting) cadExtras.diamond_setting = cadDiamondSetting;
+      if (enamel) cadExtras.enamel = enamel as string;
+      if (finish) cadExtras.finish = finish as string;
+      if (designShape) cadExtras.design_shape = designShape as string;
+      if (cadDesignType) cadExtras.design_type = cadDesignType as string;
+      if (cadTechniques.length > 0) cadExtras.techniques = cadTechniques;
+      if (earringStyle) cadExtras.earring_style = earringStyle as string;
+      if (talaf) cadExtras.talaf = talaf as string;
+      if (piroiPlacement) cadExtras.piroi_placement = piroiPlacement as string;
+      if (piroiColour) cadExtras.piroi_colour = piroiColour as string;
+      const cadPrompt = buildCADPromptJSON(context, cadExtras);
 
       // Generate both models in parallel — same prompt, different engines
       // OpenAI failure falls back to Gemini automatically (reuses already-generated Gemini image)
@@ -1517,6 +1584,7 @@ export async function registerRoutes(
         costReport: cadCostReport,
       });
     } catch (error: any) {
+      Sentry.captureException(error);
       console.error("Error generating CAD comparison:", error);
       res.status(500).json({ error: error.message });
     }
@@ -1642,6 +1710,7 @@ export async function registerRoutes(
         grok: { imageUrl: grokUrl, error: grokError, model: "grok-imagine-image" },
       });
     } catch (error: unknown) {
+      Sentry.captureException(error);
       console.error("Error generating marketing visual:", error);
       const msg = error instanceof Error ? error.message : "Marketing visual generation failed";
       res.status(500).json({ error: msg });
@@ -1683,6 +1752,7 @@ export async function registerRoutes(
                 productSegment,
                 category:       subFolder,
                 themeCode:      parseThemeCodeFromFilename(f),
+                pieceType:      parsePieceTypeFromFilename(f),
               });
             }
           }
@@ -1695,6 +1765,7 @@ export async function registerRoutes(
               productSegment,
               category:       '',
               themeCode:      parseThemeCodeFromFilename(f),
+              pieceType:      parsePieceTypeFromFilename(f),
             });
           }
         }
@@ -1769,29 +1840,28 @@ export async function registerRoutes(
       const stoneSetting: string = req.body.stoneSetting || "";
       const diamondSetting: string = req.body.diamondSetting || "";
 
-      // Build extra specs string (same logic as generate-design)
-      const extraSpecs: string[] = [];
-      if (priceBand) {
-        const bandGuidance = PRICE_BAND_DESIGN_GUIDANCE[priceBand];
-        extraSpecs.push(`Price Band: ${priceBand}${bandGuidance ? `\n${bandGuidance}` : ""}`);
-      }
-      if (polkiSetting) extraSpecs.push(`Polki Setting Style: ${polkiSetting}`);
-      if (motifCategories.length > 0) extraSpecs.push(`Motif Category: ${motifCategories.join(", ")}`);
-      if (stoneName.length > 0) extraSpecs.push(`Stone Names: ${stoneName.join(", ")}`);
-      if (stoneNameColour.length > 0) extraSpecs.push(`Stone Colours: ${stoneNameColour.join(", ")}`);
-      if (stoneShape) extraSpecs.push(`Stone Shape: ${stoneShape}`);
-      if (stoneSetting) extraSpecs.push(`Stone Setting: ${stoneSetting}`);
-      if (diamondSetting) extraSpecs.push(`Diamond Setting: ${diamondSetting}`);
-      if (enamel) extraSpecs.push(`Enamel: ${enamel}`);
-      if (finish) extraSpecs.push(`Finish: ${finish}`);
-      if (designShape) extraSpecs.push(`Design Shape: ${designShape}`);
-      if (designType) extraSpecs.push(`Design Type: ${designType}`);
-      if (techniques.length > 0) extraSpecs.push(`Techniques: ${techniques.join(", ")}`);
-      if (earringStyle) extraSpecs.push(`Earring Style: ${earringStyle}`);
-      if (talaf && talaf !== "None") extraSpecs.push(`Talaf: ${talaf}`);
-      if (piroiPlacement && piroiPlacement !== "None") extraSpecs.push(`Piroi Placement: ${piroiPlacement}`);
-      if (piroiColour && piroiColour !== "None") extraSpecs.push(`Piroi Colour: ${piroiColour}`);
-      const extraSpecsStr = extraSpecs.length > 0 ? "\n\nAdditional Specifications:\n" + extraSpecs.join("\n") : "";
+      // Build extras for JSON prompt (same logic as generate-design)
+      const priceBandGuidance = priceBand ? PRICE_BAND_DESIGN_GUIDANCE[priceBand] || "" : "";
+      const extras: Record<string, string | string[]> = {};
+      if (productSegment) extras.product_segment = productSegment;
+      if (priceBand) extras.price_band = priceBand;
+      if (priceBandGuidance) extras.budget_guidance = priceBandGuidance;
+      if (polkiSizes.length > 0) extras.polki_size = polkiSizes.map(s => POLKI_SIZE_DESCRIPTIONS[s] || s).join(" | ");
+      if (polkiSetting) extras.polki_setting = polkiSetting;
+      if (motifCategories.length > 0) extras.motif_category = motifCategories;
+      if (stoneNameColour.length > 0) extras.stone_colors = stoneNameColour;
+      if (stoneShape) extras.stone_shape = stoneShape;
+      if (stoneSetting) extras.stone_setting = stoneSetting;
+      if (diamondSetting) extras.diamond_setting = diamondSetting;
+      if (enamel) extras.enamel = enamel;
+      if (finish) extras.finish = finish;
+      if (designShape) extras.design_shape = designShape;
+      if (designType) extras.design_type = designType;
+      if (techniques.length > 0) extras.techniques = techniques;
+      if (earringStyle) extras.earring_style = earringStyle;
+      if (talaf && talaf !== "None") extras.talaf = talaf;
+      if (piroiPlacement && piroiPlacement !== "None") extras.piroi_placement = piroiPlacement;
+      if (piroiColour && piroiColour !== "None") extras.piroi_colour = piroiColour;
 
       // Build context and image prompt (same logic as generate-design, no RAG)
       const context: DesignContext = {
@@ -1804,27 +1874,410 @@ export async function registerRoutes(
         similarDesigns: [],
       };
 
-      const imagePrompt = buildImagePrompt(context) + extraSpecsStr;
+      const imagePrompt = buildImagePromptJSON(context, extras);
 
       // Determine if pure polki (no colored stones)
       const isPurePolki = stoneName.length === 0;
 
-      // Build polki size constraint (same logic as generate-design)
-      const polkiSizeConstraint = polkiSizes.length > 0
-        ? `CRITICAL — MANDATORY POLKI STONE SIZE (OVERRIDES ALL OTHER INSTRUCTIONS INCLUDING BUDGET TIER SIEVE SIZES):\nThe designer has specified the EXACT polki stone size. You MUST use ONLY this size:\n${polkiSizes.map(s => `  • ${POLKI_SIZE_DESCRIPTIONS[s] || s}`).join("\n")}\nThis is REQUIRED. Do not draw default or medium-sized polki. Stone size compliance is mandatory.`
-        : "";
-
-      // Assemble full prompt using sandwich pattern (same as generate-design sketch mode)
-      const sizeHeader = polkiSizeConstraint ? polkiSizeConstraint + "\n\n" : "";
-      const fullPrompt = sizeHeader + BRAND_RULES + "\n\n" + imagePrompt + (polkiSizeConstraint ? "\n\n" + polkiSizeConstraint : "");
+      // Assemble full prompt (same as generate-design sketch mode)
+      const fullPrompt = `${BRAND_RULES}\n\n${imagePrompt}`;
 
       res.json({
         fullPrompt,
-        polkiSizeConstraint,
+        polkiSizeConstraint: "",
         isPurePolki,
         stonesList: stoneName,
         polkiSizes,
       });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // ── Backfill piece types from filenames ──────────────────────────────────────
+  app.post("/api/backfill-piece-types", async (_req, res) => {
+    try {
+      const allImages = await storage.getAllReferenceImages();
+      let updated = 0;
+      let skipped = 0;
+
+      for (const img of allImages) {
+        const pieceType = parsePieceTypeFromFilename(img.filename);
+        if (!pieceType) { skipped++; continue; }
+
+        const meta = (img.metadata as Record<string, unknown>) || {};
+        if (meta.pieceType === pieceType) { skipped++; continue; }
+
+        const newMeta = { ...meta, pieceType };
+        await storage.updateReferenceImage(img.id, { metadata: newMeta });
+        updated++;
+      }
+
+      res.json({ updated, skipped, total: allImages.length });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ── ASSORTMENT PLANNING ENDPOINTS ─────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // Convert Google Drive uc?export=view URLs to local proxy URLs
+  function proxyDriveUrl(url: string | null): string | null {
+    if (!url) return null;
+    const match = url.match(/[?&]id=([\w-]+)/);
+    if (match) return `/api/drive-image/${match[1]}`;
+    return url;
+  }
+
+  // ── Import sales data from Excel ────────────────────────────────────────
+  app.post("/api/assortment/import-sales", async (_req, res) => {
+    try {
+      const filePath = path.resolve("b2c sales data YEAR.xlsx");
+      const workbook = xlsxRead(await fs.readFile(filePath));
+      // Target "DATA SHEET1" (index 3)
+      const sheetName = workbook.SheetNames[3] || workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const rows = xlsxUtils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+
+      const toInt = (v: unknown) => v ? Math.round(Number(v)) || null : null;
+      const sales = rows.map(row => ({
+        styleCode: String(row["StyleCode"] || ""),
+        bdmName: String(row["DEPT"] || ""),
+        jewelSoce: String(row["JEWEJL SOCE"] || row["JEWEL SOCE"] || ""),
+        tag: String(row["TAG"] || ""),
+        transPrice: toInt(row["TransPrice"]),
+        stateName: String(row["StateName"] || ""),
+        pureWt: String(row["PureWt"] || ""),
+        category: String(row["CAT"] || ""),
+        makeDays: toInt(row["MakeDays"]),
+        billingType: String(row["BillingType"] || ""),
+        transactionDate: String(row["TRASACTION DATE"] || row["TRANSACTION DATE"] || ""),
+        stock: String(row["Stock"] || ""),
+        cost: toInt(row["COST"]),
+      })).filter(s => s.styleCode !== "");
+
+      await storage.clearB2cSales();
+      await storage.bulkCreateB2cSales(sales);
+
+      res.json({ imported: sales.length, sheet: sheetName });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // ── Import stock data from Excel ────────────────────────────────────────
+  app.post("/api/assortment/import-stock", async (_req, res) => {
+    try {
+      const filePath = path.resolve("Stock Item Details.xlsx");
+      const workbook = xlsxRead(await fs.readFile(filePath));
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const rows = xlsxUtils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+
+      const toIntS = (v: unknown) => v ? Math.round(Number(v)) || null : null;
+      const items = rows.map(row => ({
+        jewelCode: String(row["Jewel Code"] || row["JewelCode"] || ""),
+        styleNo: String(row["Style No"] || row["StyleNo"] || ""),
+        imageUrl: String(row["Image_URL"] || ""),
+        manufacturer: String(row["Manufacturer"] || ""),
+        makeType: String(row["Make Type"] || row["MakeType"] || ""),
+        subCategory: String(row["Sub Category"] || row["SubCategory"] || ""),
+        stockType: String(row["Stock Type"] || row["StockType"] || ""),
+        category: String(row["Category"] || ""),
+        collectionGroupName: String(row["Collection Group Name"] || row["CollectionGroupName"] || ""),
+        collectionName: String(row["Collection Name"] || row["CollectionName"] || ""),
+        baseMetal: String(row["Base Metal"] || row["BaseMetal"] || ""),
+        locationName: String(row["Location Name"] || row["LocationName"] || ""),
+        status: String(row["Status"] || "Unknown"),
+        quantity: toIntS(row["Quantity"]),
+        diaWt: String(row["Dia Wt"] || row["DiaWt"] || ""),
+        csWt: String(row["CS Wt"] || row["CSWt"] || ""),
+        pureWt: String(row["Pure Wt"] || row["PureWt"] || ""),
+        totalNetWt: String(row["Total Net Wt"] || row["TotalNetWt"] || ""),
+        grossWt: String(row["Gross Wt"] || row["GrossWt"] || ""),
+        costPrice: toIntS(row["Cost Price"] || row["CostPrice"]),
+        tagPrice: toIntS(row["Tag Price"] || row["TagPrice"]),
+        ageingDays: toIntS(row["Ageing Days"] || row["AgeingDays"]),
+        sketchDesigner: String(row["Ord_SKETCH_DESIGNER"] || ""),
+        labName: String(row["LabName"] || row["Lab Name"] || ""),
+        certificateNo: String(row["CertificateNo"] || row["Certificate No"] || ""),
+        embeddingStatus: "pending",
+      })).filter(s => s.jewelCode !== "");
+
+      await storage.clearStockItems();
+      await storage.bulkCreateStockItems(items);
+
+      res.json({ imported: items.length, sheet: sheetName });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // ── Import status ───────────────────────────────────────────────────────
+  app.get("/api/assortment/import-status", async (_req, res) => {
+    try {
+      const salesCount = await db.execute(sql`SELECT COUNT(*)::int as count FROM b2c_sales`);
+      const stockCount = await db.execute(sql`SELECT COUNT(*)::int as count FROM stock_items`);
+      const embeddedCount = await db.execute(sql`SELECT COUNT(*)::int as count FROM stock_items WHERE embedding_status = 'done'`);
+      res.json({
+        salesCount: (salesCount.rows[0] as { count: number }).count,
+        stockCount: (stockCount.rows[0] as { count: number }).count,
+        embeddedCount: (embeddedCount.rows[0] as { count: number }).count,
+      });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // ── Embedding pipeline ──────────────────────────────────────────────────
+  let embedJob = { running: false, total: 0, processed: 0, failed: 0 };
+
+  app.post("/api/assortment/embed-stock", async (_req, res) => {
+    if (embedJob.running) {
+      return res.json({ status: "already_running", ...embedJob });
+    }
+
+    embedJob = { running: true, total: 0, processed: 0, failed: 0 };
+
+    // Count pending items
+    const countResult = await db.execute(sql`SELECT COUNT(*)::int as count FROM stock_items WHERE embedding_status = 'pending'`);
+    embedJob.total = (countResult.rows[0] as { count: number }).count;
+
+    res.json({ status: "started", total: embedJob.total });
+
+    // Process in background
+    (async () => {
+      try {
+        const BATCH = 5;
+        while (embedJob.running) {
+          const items = await storage.getStockItemsPendingEmbedding(BATCH);
+          if (items.length === 0) break;
+
+          for (const item of items) {
+            try {
+              const desc = [
+                item.category, item.subCategory, item.collectionName,
+                item.baseMetal, item.stockType, item.makeType,
+                item.pureWt ? `Pure:${item.pureWt}g` : "",
+                item.tagPrice ? `Tag:${item.tagPrice}` : "",
+              ].filter(Boolean).join(" ");
+
+              const embedding = await generateTextEmbedding(desc);
+              await storage.updateStockItem(item.id, {
+                embeddingVector: embedding,
+                embeddingStatus: "done",
+              } as Partial<typeof item>);
+              embedJob.processed++;
+            } catch {
+              await storage.updateStockItem(item.id, { embeddingStatus: "failed" } as Partial<typeof item>);
+              embedJob.failed++;
+            }
+          }
+          // Rate limit pause
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      } finally {
+        embedJob.running = false;
+      }
+    })();
+  });
+
+  app.get("/api/assortment/embed-stock/status", (_req, res) => {
+    res.json(embedJob);
+  });
+
+  // ── BDM list ────────────────────────────────────────────────────────────
+  app.get("/api/assortment/bdm-list", async (_req, res) => {
+    try {
+      const bdmNames = await storage.getDistinctBdmNames();
+      res.json({ bdmNames });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // ── BDM profile ─────────────────────────────────────────────────────────
+  app.get("/api/assortment/bdm-profile/:bdmName", async (req, res) => {
+    try {
+      const { bdmName } = req.params;
+      const sales = await storage.getSalesByBdm(bdmName);
+
+      const totalRevenue = sales.reduce((s, r) => s + (r.transPrice || 0), 0);
+
+      // Top categories
+      const catMap = new Map<string, { count: number; revenue: number }>();
+      for (const s of sales) {
+        const cat = s.category || "Unknown";
+        const existing = catMap.get(cat) || { count: 0, revenue: 0 };
+        catMap.set(cat, { count: existing.count + 1, revenue: existing.revenue + (s.transPrice || 0) });
+      }
+      const topCategories = Array.from(catMap.entries())
+        .map(([category, data]) => ({ category, ...data }))
+        .sort((a, b) => b.count - a.count);
+
+      // Top style codes
+      const styleMap = new Map<string, number>();
+      for (const s of sales) {
+        styleMap.set(s.styleCode, (styleMap.get(s.styleCode) || 0) + 1);
+      }
+      const topStyleCodes = Array.from(styleMap.entries())
+        .map(([styleCode, count]) => ({ styleCode, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 10);
+
+      // State breakdown
+      const stateMap = new Map<string, number>();
+      for (const s of sales) {
+        const state = s.stateName || "Unknown";
+        stateMap.set(state, (stateMap.get(state) || 0) + 1);
+      }
+      const stateBreakdown = Array.from(stateMap.entries())
+        .map(([state, count]) => ({ state, count }))
+        .sort((a, b) => b.count - a.count);
+
+      res.json({
+        bdmName,
+        totalSales: sales.length,
+        totalRevenue,
+        topCategories,
+        topStyleCodes,
+        stateBreakdown,
+      });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // ── Generate AI recommendations ─────────────────────────────────────────
+  app.post("/api/assortment/generate-recommendations", async (req, res) => {
+    try {
+      const { bdmName, topK = 8 } = req.body as { bdmName: string; topK?: number };
+      if (!bdmName) return res.status(400).json({ error: "bdmName is required" });
+
+      const sales = await storage.getSalesByBdm(bdmName);
+      if (sales.length === 0) return res.status(404).json({ error: "No sales found for this BDM" });
+
+      // Aggregate top 5 categories
+      const catMap = new Map<string, { count: number; revenue: number }>();
+      for (const s of sales) {
+        const cat = s.category || "Unknown";
+        const existing = catMap.get(cat) || { count: 0, revenue: 0 };
+        catMap.set(cat, { count: existing.count + 1, revenue: existing.revenue + (s.transPrice || 0) });
+      }
+      const topCats = Array.from(catMap.entries())
+        .map(([category, data]) => ({ category, ...data }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5);
+
+      const recommendations = [];
+
+      for (const cat of topCats) {
+        const avgPrice = cat.count > 0 ? Math.round(cat.revenue / cat.count) : 0;
+
+        const candidates = await storage.getStockItemsForRecommendation(cat.category, avgPrice, topK);
+
+        const toSummary = (item: typeof candidates[0]) => {
+          const priceDiff = item.tagPrice && avgPrice > 0
+            ? 1 - Math.abs((item.tagPrice - avgPrice) / avgPrice)
+            : 0;
+          return {
+            id: item.id,
+            jewelCode: item.jewelCode,
+            styleNo: item.styleNo,
+            imageUrl: proxyDriveUrl(item.imageUrl),
+            category: item.category,
+            tagPrice: item.tagPrice,
+            status: item.status,
+            grossWt: item.grossWt,
+            pureWt: item.pureWt,
+            collectionName: item.collectionName,
+            subCategory: item.subCategory,
+            priceMatch: Math.max(0, Math.round(priceDiff * 100)) / 100,
+          };
+        };
+
+        if (candidates.length > 0) {
+          recommendations.push({
+            category: cat.category,
+            salesCount: cat.count,
+            avgPrice,
+            totalOnHand: candidates.length,
+            suggested: toSummary(candidates[0]),
+            alternatives: candidates.slice(1).map(toSummary),
+          });
+        } else {
+          recommendations.push({
+            category: cat.category,
+            salesCount: cat.count,
+            avgPrice,
+            totalOnHand: 0,
+            suggested: null,
+            alternatives: [],
+          });
+        }
+      }
+
+      // Build profile summary
+      const totalRevenue = sales.reduce((s, r) => s + (r.transPrice || 0), 0);
+      const profile = {
+        bdmName,
+        totalSales: sales.length,
+        totalRevenue,
+        topCategories: topCats,
+      };
+
+      res.json({ bdmName, recommendations, profile });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // ── Google Drive image proxy (avoids CORP / redirect issues) ────────────
+  app.get("/api/drive-image/:fileId", async (req, res) => {
+    const { fileId } = req.params;
+    if (!fileId || !/^[\w-]+$/.test(fileId)) {
+      return res.status(400).json({ error: "Invalid file ID" });
+    }
+    try {
+      const url = `https://drive.usercontent.google.com/download?id=${fileId}&export=view`;
+      const upstream = await fetch(url);
+      if (!upstream.ok) {
+        return res.status(upstream.status).json({ error: "Failed to fetch image" });
+      }
+      const ct = upstream.headers.get("content-type") || "image/jpeg";
+      res.setHeader("Content-Type", ct);
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      const arrayBuf = await upstream.arrayBuffer();
+      res.send(Buffer.from(arrayBuf));
+    } catch {
+      res.status(502).json({ error: "Image proxy error" });
+    }
+  });
+
+  // ── Save assortment plan ────────────────────────────────────────────────
+  app.post("/api/assortment/save-plan", async (req, res) => {
+    try {
+      const { bdmName, selectedItemIds, notes } = req.body as {
+        bdmName: string;
+        selectedItemIds: string[];
+        notes?: string;
+      };
+      if (!bdmName || !selectedItemIds?.length) {
+        return res.status(400).json({ error: "bdmName and selectedItemIds are required" });
+      }
+
+      const plan = await storage.createAssortmentPlan({ bdmName, selectedItemIds, notes: notes || null });
+      res.json(plan);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: msg });
