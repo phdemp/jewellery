@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/react";
 import { DesignRequest } from "./jewellery-logic";
 
 export interface ReferenceImage {
@@ -15,6 +16,7 @@ export interface ReferenceImage {
     styleElements: string[];
     motifs: string[];
     structure: string;
+    pieceType?: string;
   };
 }
 
@@ -56,9 +58,9 @@ export async function uploadReferenceImage(
 ): Promise<ReferenceImage> {
   const formData = new FormData();
   formData.append('image', file);
-  if (themeCode)      formData.append('themeCode', themeCode);
+  if (themeCode) formData.append('themeCode', themeCode);
   if (productSegment) formData.append('productSegment', productSegment);
-  if (category)       formData.append('category', category);
+  if (category) formData.append('category', category);
 
   const response = await fetch('/api/reference-images', {
     method: 'POST',
@@ -67,7 +69,9 @@ export async function uploadReferenceImage(
 
   if (!response.ok) {
     const error = await response.json();
-    throw new Error(error.error || 'Failed to upload reference image');
+    const err = new Error(error.error || 'Failed to upload reference image');
+    Sentry.captureException(err, { extra: { endpoint: '/api/reference-images', status: response.status } });
+    throw err;
   }
 
   return response.json();
@@ -98,20 +102,20 @@ export const REFERENCE_SEGMENTS = [
 ] as const;
 
 export const REFERENCE_SEGMENT_CATEGORIES: Record<string, string[]> = {
-  "Bridal":               ["Choker", "Choker Set", "Earrings", "Necklace", "Necklace Set", "Long Pendant", "Long Pendant Set", "Long Necklace", "Long Necklace Set"],
-  "Bridal Lite":          ["Choker", "Choker Set", "Earrings", "Necklace", "Necklace Set", "Long Pendant", "Long Pendant Set", "Long Necklace", "Long Necklace Set"],
-  "Traditional":          ["Choker", "Choker Set", "Earrings", "Necklace", "Necklace Set", "Long Pendant", "Long Pendant Set", "Long Necklace", "Long Necklace Set"],
-  "Modern":               ["Choker", "Choker Set", "Necklace", "Necklace Set", "Long Necklace", "Long Necklace Set"],
-  "RTW":                  ["Chain Necklace", "Chain Necklace Set", "Pendant", "Pendant Set"],
-  "Ear Essentials":       ["Earrings", "Studs", "Drops", "Hoops"],
-  "Handwear":             ["Bracelet", "Bangle", "Hathphool", "Ring"],
-  "Add-ons":              ["Nosepin/Nath", "Mangtika", "Brooch", "Buttons", "Kalingi", "Kanauti", "Mala"],
+  "Bridal": ["Choker", "Choker Set", "Earrings", "Necklace", "Necklace Set", "Long Pendant", "Long Pendant Set", "Long Necklace", "Long Necklace Set"],
+  "Bridal Lite": ["Choker", "Choker Set", "Earrings", "Necklace", "Necklace Set", "Long Pendant", "Long Pendant Set", "Long Necklace", "Long Necklace Set"],
+  "Traditional": ["Choker", "Choker Set", "Earrings", "Necklace", "Necklace Set", "Long Pendant", "Long Pendant Set", "Long Necklace", "Long Necklace Set"],
+  "Modern": ["Choker", "Choker Set", "Necklace", "Necklace Set", "Long Necklace", "Long Necklace Set"],
+  "RTW": ["Chain Necklace", "Chain Necklace Set", "Pendant", "Pendant Set"],
+  "Ear Essentials": ["Earrings", "Studs", "Drops", "Hoops"],
+  "Handwear": ["Bracelet", "Bangle", "Hathphool", "Ring"],
+  "Add-ons": ["Nosepin/Nath", "Mangtika", "Brooch", "Buttons", "Kalingi", "Kanauti", "Mala"],
   "Exclusive - Grandeur": ["Choker", "Choker Set", "Necklace", "Necklace Set", "Long Necklace", "Long Necklace Set"],
 };
 
 export async function getReferenceImages(): Promise<ReferenceImage[]> {
   const response = await fetch('/api/reference-images');
-  
+
   if (!response.ok) {
     throw new Error('Failed to fetch reference images');
   }
@@ -184,7 +188,9 @@ export async function generateDesign(request: DesignRequest, styleOverride?: Fil
 
   if (!response.ok) {
     const error = await response.json();
-    throw new Error(error.error || 'Failed to generate design');
+    const err = new Error(error.error || 'Failed to generate design');
+    Sentry.captureException(err, { extra: { endpoint: '/api/generate-design', status: response.status } });
+    throw err;
   }
 
   return response.json();
@@ -192,7 +198,7 @@ export async function generateDesign(request: DesignRequest, styleOverride?: Fil
 
 export async function getDesignProjects(): Promise<DesignProject[]> {
   const response = await fetch('/api/design-projects');
-  
+
   if (!response.ok) {
     throw new Error('Failed to fetch design projects');
   }
@@ -202,7 +208,7 @@ export async function getDesignProjects(): Promise<DesignProject[]> {
 
 export async function getDesignProject(id: string): Promise<DesignProject> {
   const response = await fetch(`/api/design-projects/${id}`);
-  
+
   if (!response.ok) {
     throw new Error('Failed to fetch design project');
   }
@@ -254,7 +260,9 @@ export async function editDesign(designId: string, editPrompt: string): Promise<
 
   if (!response.ok) {
     const error = await response.json();
-    throw new Error(error.error || 'Failed to edit design');
+    const err = new Error(error.error || 'Failed to edit design');
+    Sentry.captureException(err, { extra: { endpoint: `/api/design-projects/${designId}/edit`, status: response.status } });
+    throw err;
   }
 
   return response.json();
@@ -262,7 +270,7 @@ export async function editDesign(designId: string, editPrompt: string): Promise<
 
 export async function getDesignIterations(designId: string): Promise<DesignIteration[]> {
   const response = await fetch(`/api/design-projects/${designId}/iterations`);
-  
+
   if (!response.ok) {
     throw new Error('Failed to fetch design iterations');
   }
@@ -386,66 +394,66 @@ export interface SegmentCategoryMap {
 
 export const SEGMENT_CATEGORY_PRICE_MAP: SegmentCategoryMap = {
   "Bridal": [
-    { category: "Necklace",                          price_bands: ["25-50 Lakh", "50 Lakh - 1Cr"] },
-    { category: "Necklace Set",                      price_bands: ["25-50 Lakh", "50 Lakh - 1Cr"] },
-    { category: "Choker",                            price_bands: ["25-50 Lakh", "50 Lakh - 1Cr"] },
-    { category: "Choker Set",                        price_bands: ["25-50 Lakh", "50 Lakh - 1Cr"] },
-    { category: "Long Pendant (with piroi)",         price_bands: ["25-50 Lakh", "50 Lakh - 1Cr"] },
-    { category: "Long Pendant Set (with piroi)",     price_bands: ["25-50 Lakh", "50 Lakh - 1Cr"] },
-    { category: "Long Necklace (without piroi)",     price_bands: ["25-50 Lakh", "50 Lakh - 1Cr"] },
+    { category: "Necklace", price_bands: ["25-50 Lakh", "50 Lakh - 1Cr"] },
+    { category: "Necklace Set", price_bands: ["25-50 Lakh", "50 Lakh - 1Cr"] },
+    { category: "Choker", price_bands: ["25-50 Lakh", "50 Lakh - 1Cr"] },
+    { category: "Choker Set", price_bands: ["25-50 Lakh", "50 Lakh - 1Cr"] },
+    { category: "Long Pendant (with piroi)", price_bands: ["25-50 Lakh", "50 Lakh - 1Cr"] },
+    { category: "Long Pendant Set (with piroi)", price_bands: ["25-50 Lakh", "50 Lakh - 1Cr"] },
+    { category: "Long Necklace (without piroi)", price_bands: ["25-50 Lakh", "50 Lakh - 1Cr"] },
     { category: "Long Necklace Set (without piroi)", price_bands: ["25-50 Lakh", "50 Lakh - 1Cr"] },
   ],
   "Bridal Lite": [
-    { category: "Necklace",                          price_bands: ["15-25 Lakh"] },
-    { category: "Necklace Set",                      price_bands: ["15-25 Lakh"] },
-    { category: "Choker",                            price_bands: ["15-25 Lakh"] },
-    { category: "Choker Set",                        price_bands: ["15-25 Lakh"] },
-    { category: "Long Pendant (with piroi)",         price_bands: ["15-25 Lakh"] },
-    { category: "Long Pendant Set (with piroi)",     price_bands: ["15-25 Lakh"] },
-    { category: "Long Necklace (without piroi)",     price_bands: ["15-25 Lakh"] },
+    { category: "Necklace", price_bands: ["15-25 Lakh"] },
+    { category: "Necklace Set", price_bands: ["15-25 Lakh"] },
+    { category: "Choker", price_bands: ["15-25 Lakh"] },
+    { category: "Choker Set", price_bands: ["15-25 Lakh"] },
+    { category: "Long Pendant (with piroi)", price_bands: ["15-25 Lakh"] },
+    { category: "Long Pendant Set (with piroi)", price_bands: ["15-25 Lakh"] },
+    { category: "Long Necklace (without piroi)", price_bands: ["15-25 Lakh"] },
     { category: "Long Necklace Set (without piroi)", price_bands: ["15-25 Lakh"] },
   ],
   "Traditional": [
-    { category: "Necklace",                          price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
-    { category: "Necklace Set",                      price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
-    { category: "Choker",                            price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
-    { category: "Choker Set",                        price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
-    { category: "Long Pendant (with piroi)",         price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
-    { category: "Long Pendant Set (with piroi)",     price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
-    { category: "Long Necklace (without piroi)",     price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
+    { category: "Necklace", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
+    { category: "Necklace Set", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
+    { category: "Choker", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
+    { category: "Choker Set", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
+    { category: "Long Pendant (with piroi)", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
+    { category: "Long Pendant Set (with piroi)", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
+    { category: "Long Necklace (without piroi)", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
     { category: "Long Necklace Set (without piroi)", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
   ],
   "Modern": [
-    { category: "Necklace",                          price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh", "15-25 Lakh", "25-50 Lakh", "50 Lakh - 1Cr"] },
-    { category: "Necklace Set",                      price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh", "15-25 Lakh", "25-50 Lakh", "50 Lakh - 1Cr"] },
-    { category: "Choker",                            price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh", "15-25 Lakh", "25-50 Lakh", "50 Lakh - 1Cr"] },
-    { category: "Choker Set",                        price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh", "15-25 Lakh", "25-50 Lakh", "50 Lakh - 1Cr"] },
-    { category: "Long Necklace (without piroi)",     price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh", "15-25 Lakh", "25-50 Lakh", "50 Lakh - 1Cr"] },
+    { category: "Necklace", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh", "15-25 Lakh", "25-50 Lakh", "50 Lakh - 1Cr"] },
+    { category: "Necklace Set", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh", "15-25 Lakh", "25-50 Lakh", "50 Lakh - 1Cr"] },
+    { category: "Choker", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh", "15-25 Lakh", "25-50 Lakh", "50 Lakh - 1Cr"] },
+    { category: "Choker Set", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh", "15-25 Lakh", "25-50 Lakh", "50 Lakh - 1Cr"] },
+    { category: "Long Necklace (without piroi)", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh", "15-25 Lakh", "25-50 Lakh", "50 Lakh - 1Cr"] },
     { category: "Long Necklace Set (without piroi)", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh", "15-25 Lakh", "25-50 Lakh", "50 Lakh - 1Cr"] },
   ],
   "Ready to Wear (RTW)": [
-    { category: "Chain Necklace",     price_bands: ["0-5 Lakh"] },
+    { category: "Chain Necklace", price_bands: ["0-5 Lakh"] },
     { category: "Chain Necklace Set", price_bands: ["0-5 Lakh"] },
-    { category: "Pendant",            price_bands: ["0-5 Lakh"] },
-    { category: "Pendant Set",        price_bands: ["0-5 Lakh"] },
+    { category: "Pendant", price_bands: ["0-5 Lakh"] },
+    { category: "Pendant Set", price_bands: ["0-5 Lakh"] },
   ],
   "Ear Essentials": [
     { category: "Earring", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh", "15-25 Lakh"] },
   ],
   "Hand-wear": [
-    { category: "Bracelet",  price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
-    { category: "Bangle",    price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh", "15-25 Lakh"] },
-    { category: "Hathphool", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh", "15-25 Lakh"] },
-    { category: "Ring",      price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
+    { category: "Bracelet", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
+    { category: "Bangle", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh", "15-25 Lakh"] },
+    { category: "Hathphool", price_bands: ["0-5 Lakh", "5-10 Lakh", "10-15 Lakh"] },
+    { category: "Ring", price_bands: ["0-5 Lakh", "5-10 Lakh"] },
   ],
   "Add-ons": [
-    { category: "Nosepin/Nath",        price_bands: ["0-5 Lakh"] },
-    { category: "Mangtika",            price_bands: ["0-5 Lakh"] },
-    { category: "Brooch",              price_bands: ["0-5 Lakh"] },
-    { category: "Mens Item – Buttons", price_bands: ["0-5 Lakh"] },
-    { category: "Kalingi",             price_bands: ["0-5 Lakh"] },
-    { category: "Kanauti",             price_bands: ["0-5 Lakh"] },
-    { category: "Mala",                price_bands: ["0-5 Lakh"] },
+    { category: "Nosepin/Nath", price_bands: ["0-5 Lakh"] },
+    { category: "Mangtika", price_bands: ["0-5 Lakh"] },
+    { category: "Brooch", price_bands: ["0-5 Lakh", "5-10 Lakh"] },
+    { category: "Mens Item – Buttons", price_bands: ["0-5 Lakh", "5-10 Lakh"] },
+    { category: "Kalingi", price_bands: ["0-5 Lakh", "5-10 Lakh"] },
+    { category: "Kanauti", price_bands: ["0-5 Lakh", "5-10 Lakh"] },
+    { category: "Mala", price_bands: ["0-5 Lakh", "5-10 Lakh"] },
   ],
 };
 
@@ -456,69 +464,69 @@ export interface DesignShapeEntry {
 
 export const DESIGN_SHAPE_MAP: Record<string, DesignShapeEntry> = {
   // Necklace family
-  "Necklace":                          { shapes: ["Basic", "U-Shape", "Y-Shape", "V-Shape", "Layered", "Hasli"] },
-  "Necklace Set":                      { shapes: ["Basic", "U-Shape", "Y-Shape", "V-Shape", "Layered", "Hasli"], earringStyles: ["Studs", "Drops", "Hoops"] },
+  "Necklace": { shapes: ["Basic", "U-Shape", "Y-Shape", "V-Shape", "Layered", "Hasli"] },
+  "Necklace Set": { shapes: ["Basic", "U-Shape", "Y-Shape", "V-Shape", "Layered", "Hasli"], earringStyles: ["Studs", "Drops", "Hoops"] },
   // Choker family
-  "Choker":                            { shapes: ["Classic Choker", "Dog Band Choker", "Choker With Jhaalar", "Semi Chokar", "T-Shape"] },
-  "Choker Set":                        { shapes: ["Classic Choker", "Dog Band Choker", "Choker With Jhaalar", "Semi Chokar", "T-Shape"], earringStyles: ["Studs", "Drops", "Hoops"] },
+  "Choker": { shapes: ["Classic Choker", "Dog Band Choker", "Choker With Jhaalar", "Semi Chokar", "T-Shape"] },
+  "Choker Set": { shapes: ["Classic Choker", "Dog Band Choker", "Choker With Jhaalar", "Semi Chokar", "T-Shape"], earringStyles: ["Studs", "Drops", "Hoops"] },
   // Long Pendant family
-  "Long Pendant (with piroi)":         { shapes: ["U-Shape", "Layered", "V-Shape", "Y-Shape"] },
-  "Long Pendant Set (with piroi)":     { shapes: ["U-Shape", "Layered", "V-Shape", "Y-Shape"], earringStyles: ["Studs", "Drops", "Hoops"] },
+  "Long Pendant (with piroi)": { shapes: ["U-Shape", "Layered", "V-Shape", "Y-Shape"] },
+  "Long Pendant Set (with piroi)": { shapes: ["U-Shape", "Layered", "V-Shape", "Y-Shape"], earringStyles: ["Studs", "Drops", "Hoops"] },
   // Long Necklace family
-  "Long Necklace (without piroi)":     { shapes: ["U-Shape", "Y-Shape", "V-Shape", "Layered"] },
+  "Long Necklace (without piroi)": { shapes: ["U-Shape", "Y-Shape", "V-Shape", "Layered"] },
   "Long Necklace Set (without piroi)": { shapes: ["U-Shape", "Y-Shape", "V-Shape", "Layered"], earringStyles: ["Studs", "Drops", "Hoops"] },
   // RTW
-  "Chain Necklace":                    { shapes: ["Basic", "Layered"] },
-  "Chain Necklace Set":                { shapes: ["Basic", "Layered"], earringStyles: ["Studs", "Drops", "Hoops"] },
-  "Pendant":                           { shapes: ["Basic", "Layered", "V-Shape", "Y-Shape"] },
-  "Pendant Set":                       { shapes: ["Basic", "Layered", "V-Shape", "Y-Shape"], earringStyles: ["Studs", "Drops", "Hoops"] },
+  "Chain Necklace": { shapes: ["Basic", "Layered"] },
+  "Chain Necklace Set": { shapes: ["Basic", "Layered"], earringStyles: ["Studs", "Drops", "Hoops"] },
+  "Pendant": { shapes: ["Basic", "Layered", "V-Shape", "Y-Shape"] },
+  "Pendant Set": { shapes: ["Basic", "Layered", "V-Shape", "Y-Shape"], earringStyles: ["Studs", "Drops", "Hoops"] },
   // Ear Essentials
-  "Earring":                           { shapes: ["Studs", "Drops", "Hoops"] },
+  "Earring": { shapes: ["Studs", "Drops", "Hoops"] },
   // Hand-wear
-  "Bracelet":                          { shapes: ["Basic"] },
-  "Bangle":                            { shapes: ["Round", "Oval"] },
-  "Hathphool":                         { shapes: ["Basic"] },
-  "Ring":                              { shapes: ["Basic"] },
+  "Bracelet": { shapes: ["Basic"] },
+  "Bangle": { shapes: ["Round", "Oval"] },
+  "Hathphool": { shapes: ["Basic"] },
+  "Ring": { shapes: ["Basic"] },
   // Add-ons
-  "Nosepin/Nath":                      { shapes: ["Basic"] },
-  "Mangtika":                          { shapes: ["Basic"] },
-  "Brooch":                            { shapes: ["Basic"] },
-  "Mens Item \u2013 Buttons":          { shapes: ["Basic"] },
-  "Kalingi":                           { shapes: ["Basic"] },
-  "Kanauti":                           { shapes: ["Single", "Layered"] },
-  "Mala":                              { shapes: ["Basic"] },
+  "Nosepin/Nath": { shapes: ["Basic"] },
+  "Mangtika": { shapes: ["Basic"] },
+  "Brooch": { shapes: ["Basic"] },
+  "Mens Item \u2013 Buttons": { shapes: ["Basic"] },
+  "Kalingi": { shapes: ["Basic"] },
+  "Kanauti": { shapes: ["Single", "Layered"] },
+  "Mala": { shapes: ["Basic"] },
 };
 
 // ─── Shared stone constants (used by Home, CAD Comparison, and Modify pages) ──
 
 export const STONE_NAME_COLOUR_MAP: Record<string, string[]> = {
-  "Aquamarine":         ["Light Blue", "Light Green"],
-  "Aventurian":         ["Green"],
-  "Sapphire":           ["Yellow", "Blue"],
-  "Emerald":            ["Dark Green", "Green"],
-  "Emerald Russian":    ["Light Green"],
-  "Emerald Colombian":  ["Dark Green", "Green"],
-  "Beryl":              ["Green"],
-  "Floride":            ["Multi Color"],
-  "Onyx":               ["Green"],
-  "Morganite":          ["Pink", "Peach"],
-  "Navratna":           ["Multi Color"],
-  "Opal":               ["Multi Color"],
-  "Ruby":               ["Red"],
-  "Tanzanite":          ["Blue", "Violet"],
-  "Tourmaline":         ["Multi Color"],
-  "Synthetic Stone":    ["Multi Color"],
-  "Pearl":              ["White", "Cream"],
-  "Basra Pearl":        ["White", "Cream"],
-  "JKC Pearl":          ["White", "Cream"],
-  "South Sea Pearl":    ["White", "Golden"],
-  "Coral":              ["Red", "Orange"],
-  "Green Strawberry":   ["Green", "Pink"],
-  "Hydro":              ["Multi Color"],
-  "Spinel":             ["Multi Color"],
-  "Ruby Glass Filled":  ["Red"],
-  "Amethyst":           ["Purple"],
-  "Turquoise":          ["Blue", "Green"],
+  "Aquamarine": ["Light Blue", "Light Green"],
+  "Aventurian": ["Green"],
+  "Sapphire": ["Yellow", "Blue"],
+  "Emerald": ["Dark Green", "Green"],
+  "Emerald Russian": ["Light Green"],
+  "Emerald Colombian": ["Dark Green", "Green"],
+  "Beryl": ["Green"],
+  "Floride": ["Multi Color"],
+  "Onyx": ["Green"],
+  "Morganite": ["Pink", "Peach"],
+  "Navratna": ["Multi Color"],
+  "Opal": ["Multi Color"],
+  "Ruby": ["Red"],
+  "Tanzanite": ["Blue", "Violet"],
+  "Tourmaline": ["Multi Color"],
+  "Synthetic Stone": ["Multi Color"],
+  "Pearl": ["White", "Cream"],
+  "Basra Pearl": ["White", "Cream"],
+  "JKC Pearl": ["White", "Cream"],
+  "South Sea Pearl": ["White", "Golden"],
+  "Coral": ["Red", "Orange"],
+  "Green Strawberry": ["Green", "Pink"],
+  "Hydro": ["Multi Color"],
+  "Spinel": ["Multi Color"],
+  "Ruby Glass Filled": ["Red"],
+  "Amethyst": ["Purple"],
+  "Turquoise": ["Blue", "Green"],
   "Nano Semi Precious": ["Multi Color"],
 };
 
@@ -583,7 +591,9 @@ export async function generateCADComparison(
     } catch {
       errorMessage = `Server returned ${response.status} ${response.statusText}`;
     }
-    throw new Error(errorMessage);
+    const error = new Error(errorMessage);
+    Sentry.captureException(error, { extra: { endpoint: '/api/generate-cad-comparison', status: response.status } });
+    throw error;
   }
   return response.json();
 }
@@ -704,19 +714,21 @@ export async function generateMarketingVisual(
     } catch {
       errorMessage = `Server returned ${response.status} ${response.statusText}`;
     }
-    throw new Error(errorMessage);
+    const error = new Error(errorMessage);
+    Sentry.captureException(error, { extra: { endpoint: '/api/generate-marketing', status: response.status } });
+    throw error;
   }
 
   return response.json();
 }
 
 export interface DesignImageImportStatus {
-  running:   boolean;
-  total:     number;
+  running: boolean;
+  total: number;
   processed: number;
-  failed:    number;
-  skipped:   number;
-  errors:    string[];
+  failed: number;
+  skipped: number;
+  errors: string[];
 }
 
 export async function startDesignImageImport(): Promise<{
@@ -731,6 +743,12 @@ export async function startDesignImageImport(): Promise<{
 
 export async function getDesignImageImportStatus(): Promise<DesignImageImportStatus> {
   const res = await fetch('/api/import-design-images/status');
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function backfillPieceTypes(): Promise<{ updated: number; skipped: number; total: number }> {
+  const res = await fetch('/api/backfill-piece-types', { method: 'POST' });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -787,8 +805,138 @@ export async function modifyDesign(
 
   if (!response.ok) {
     const error = await response.json();
-    throw new Error(error.error || 'Failed to modify design');
+    const err = new Error(error.error || 'Failed to modify design');
+    Sentry.captureException(err, { extra: { endpoint: '/api/modify-design', status: response.status } });
+    throw err;
   }
 
   return response.json();
+}
+
+// ── Assortment Planning API ────────────────────────────────────────────────
+
+export interface StockItemSummary {
+  id: string;
+  jewelCode: string;
+  styleNo: string;
+  imageUrl: string | null;
+  category: string | null;
+  tagPrice: number | null;
+  status: string;
+  grossWt: string | null;
+  pureWt: string | null;
+  collectionName: string | null;
+  subCategory: string | null;
+  priceMatch: number;
+}
+
+export interface AssortmentRecommendation {
+  category: string;
+  salesCount: number;
+  avgPrice: number;
+  suggested: StockItemSummary | null;
+  alternatives: StockItemSummary[];
+}
+
+export interface BdmProfile {
+  bdmName: string;
+  totalSales: number;
+  totalRevenue: number;
+  topCategories: { category: string; count: number; revenue: number }[];
+}
+
+export interface AssortmentRecommendationResponse {
+  bdmName: string;
+  recommendations: AssortmentRecommendation[];
+  profile: BdmProfile;
+}
+
+export interface EmbedStockStatus {
+  running: boolean;
+  total: number;
+  processed: number;
+  failed: number;
+}
+
+export async function getAssortmentBdmList(): Promise<{ bdmNames: string[] }> {
+  const res = await fetch("/api/assortment/bdm-list");
+  if (!res.ok) throw new Error("Failed to fetch BDM list");
+  return res.json();
+}
+
+export async function getAssortmentBdmProfile(bdmName: string): Promise<{
+  bdmName: string;
+  totalSales: number;
+  totalRevenue: number;
+  topCategories: { category: string; count: number; revenue: number }[];
+  topStyleCodes: { styleCode: string; count: number }[];
+  stateBreakdown: { state: string; count: number }[];
+}> {
+  const res = await fetch(`/api/assortment/bdm-profile/${encodeURIComponent(bdmName)}`);
+  if (!res.ok) throw new Error("Failed to fetch BDM profile");
+  return res.json();
+}
+
+export async function generateAssortmentRecommendations(
+  bdmName: string,
+  topK?: number
+): Promise<AssortmentRecommendationResponse> {
+  const res = await fetch("/api/assortment/generate-recommendations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bdmName, topK }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to generate recommendations");
+  }
+  return res.json();
+}
+
+export async function importAssortmentSales(): Promise<{ imported: number; sheet: string }> {
+  const res = await fetch("/api/assortment/import-sales", { method: "POST" });
+  if (!res.ok) throw new Error("Failed to import sales data");
+  return res.json();
+}
+
+export async function importAssortmentStock(): Promise<{ imported: number; sheet: string }> {
+  const res = await fetch("/api/assortment/import-stock", { method: "POST" });
+  if (!res.ok) throw new Error("Failed to import stock data");
+  return res.json();
+}
+
+export async function getAssortmentImportStatus(): Promise<{
+  salesCount: number;
+  stockCount: number;
+  embeddedCount: number;
+}> {
+  const res = await fetch("/api/assortment/import-status");
+  if (!res.ok) throw new Error("Failed to fetch import status");
+  return res.json();
+}
+
+export async function startStockEmbedding(): Promise<{ status: string; total: number }> {
+  const res = await fetch("/api/assortment/embed-stock", { method: "POST" });
+  if (!res.ok) throw new Error("Failed to start embedding");
+  return res.json();
+}
+
+export async function getStockEmbeddingStatus(): Promise<EmbedStockStatus> {
+  const res = await fetch("/api/assortment/embed-stock/status");
+  if (!res.ok) throw new Error("Failed to fetch embedding status");
+  return res.json();
+}
+
+export async function saveAssortmentPlan(
+  bdmName: string,
+  selectedItemIds: string[],
+  notes?: string
+): Promise<{ id: string }> {
+  const res = await fetch("/api/assortment/save-plan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bdmName, selectedItemIds, notes }),
+  });
+  if (!res.ok) throw new Error("Failed to save plan");
+  return res.json();
 }

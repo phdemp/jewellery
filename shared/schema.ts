@@ -117,3 +117,94 @@ export const driveImportRequestSchema = z.object({
 });
 
 export type DriveImportRequest = z.infer<typeof driveImportRequestSchema>;
+
+// ── Assortment Planning tables ──────────────────────────────────────────────
+
+// B2C Sales history (imported from Excel)
+export const b2cSales = pgTable("b2c_sales", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  styleCode: text("style_code").notNull(),
+  bdmName: text("bdm_name").notNull(),
+  jewelSoce: text("jewel_soce"),
+  tag: text("tag"),
+  transPrice: integer("trans_price"),
+  stateName: text("state_name"),
+  pureWt: text("pure_wt"),
+  category: text("category"),
+  makeDays: integer("make_days"),
+  billingType: text("billing_type"),
+  transactionDate: text("transaction_date"),
+  stock: text("stock"),
+  cost: integer("cost"),
+  importedAt: timestamp("imported_at").defaultNow().notNull(),
+});
+
+export const insertB2cSaleSchema = createInsertSchema(b2cSales).omit({
+  id: true,
+  importedAt: true,
+});
+
+export type InsertB2cSale = z.infer<typeof insertB2cSaleSchema>;
+export type B2cSale = typeof b2cSales.$inferSelect;
+
+// Stock Items inventory (imported from Excel)
+export const stockItems = pgTable("stock_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  jewelCode: text("jewel_code").notNull(),
+  styleNo: text("style_no").notNull(),
+  imageUrl: text("image_url"),
+  localImagePath: text("local_image_path"),
+  thumbnailPath: text("thumbnail_path"),
+  manufacturer: text("manufacturer"),
+  makeType: text("make_type"),
+  subCategory: text("sub_category"),
+  stockType: text("stock_type"),
+  category: text("category"),
+  collectionGroupName: text("collection_group_name"),
+  collectionName: text("collection_name"),
+  baseMetal: text("base_metal"),
+  locationName: text("location_name"),
+  status: text("status").notNull(),
+  quantity: integer("quantity"),
+  diaWt: text("dia_wt"),
+  csWt: text("cs_wt"),
+  pureWt: text("pure_wt"),
+  totalNetWt: text("total_net_wt"),
+  grossWt: text("gross_wt"),
+  costPrice: integer("cost_price"),
+  tagPrice: integer("tag_price"),
+  ageingDays: integer("ageing_days"),
+  sketchDesigner: text("sketch_designer"),
+  labName: text("lab_name"),
+  certificateNo: text("certificate_no"),
+  embeddingVector: vector("embedding_vector"),
+  embeddingStatus: text("embedding_status").default("pending"),
+  importedAt: timestamp("imported_at").defaultNow().notNull(),
+});
+
+export const insertStockItemSchema = createInsertSchema(stockItems).omit({
+  id: true,
+  importedAt: true,
+}).extend({
+  embeddingVector: z.array(z.number()).nullable().optional(),
+});
+
+export type InsertStockItem = z.infer<typeof insertStockItemSchema>;
+export type StockItem = typeof stockItems.$inferSelect;
+
+// Assortment Plans — saved shipment recommendations
+export const assortmentPlans = pgTable("assortment_plans", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  bdmName: text("bdm_name").notNull(),
+  selectedItemIds: text("selected_item_ids").array().notNull(),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertAssortmentPlanSchema = createInsertSchema(assortmentPlans).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertAssortmentPlan = z.infer<typeof insertAssortmentPlanSchema>;
+export type AssortmentPlan = typeof assortmentPlans.$inferSelect;

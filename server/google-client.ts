@@ -189,8 +189,79 @@ export function buildDesignContext(
   return context;
 }
 
-// Build a comprehensive prompt for image generation with RAG-enhanced style transfer
-export function buildImagePrompt(request: DesignContext): string {
+// Build a compact JSON-structured prompt for image generation (replaces prose blob)
+export function buildImagePromptJSON(
+  request: DesignContext,
+  extras: Record<string, string | string[]> = {}
+): string {
+  const stones = request.stones?.length ? [...request.stones] : ["Polki"];
+  if (!stones.map(s => s.toLowerCase()).includes("polki")) stones.unshift("Polki");
+  const isPurePolki = stones.length === 1 && stones[0].toLowerCase() === "polki";
+
+  const spec: Record<string, unknown> = {
+    category: request.category,
+    motifs: request.motifs,
+    stones,
+    polki_rule: isPurePolki ? "pure_polki_only_no_colored_stones" : "polki_dominant_over_50pct",
+  };
+  if (request.materialRatio) spec.material_ratio = request.materialRatio;
+  if (request.customNotes) spec.notes = request.customNotes;
+
+  // Merge extras — skip empty strings and empty arrays
+  for (const [key, val] of Object.entries(extras)) {
+    if (Array.isArray(val) ? val.length > 0 : val?.trim()) {
+      spec[key] = val;
+    }
+  }
+
+  // Style from RAG references or brand defaults
+  const refDesign = !isPurePolki && request.similarDesigns?.length
+    ? request.similarDesigns[0]
+    : null;
+  spec.style = {
+    lines: refDesign?.lineStyle ?? "fine pencil linework in soft brown/gold tones",
+    coloring: refDesign?.coloringTechnique ?? "soft watercolor washes with light colored-pencil shading",
+    stones: refDesign?.gemstoneRendering ?? (
+      isPurePolki
+        ? "ONLY polki — irregular white/off-white uncut diamonds in gold kundan bezels"
+        : `polki as white/off-white irregular shapes in gold kundan bezels (dominant), ${
+            stones.filter(s => s.toLowerCase() !== "polki").join(", ")
+          } as soft pastel accent fills`
+    ),
+  };
+  if (refDesign?.backgroundStyle) {
+    (spec.style as Record<string, string>).background = refDesign.backgroundStyle;
+  }
+
+  // Reference motif inspiration from RAG
+  if (request.similarDesigns?.length) {
+    const refMotifs = Array.from(new Set(request.similarDesigns.flatMap(d => d.motifs || []))).slice(0, 5);
+    if (refMotifs.length) spec.reference_motifs = refMotifs;
+  }
+
+  // Layout — category-specific constraints
+  const cat = request.category.toLowerCase();
+  const isNecklaceSet = cat.includes("necklace set");
+  const isSet = cat.includes("set");
+  spec.layout = {
+    safe_zone_pct: 15,
+    max_fill_pct: 70,
+    ...(isNecklaceSet && {
+      earrings: "exactly_2_matching_pair",
+      zones: { top: "10-20pct_chain_clasp", center: "25-75pct_main_body", bottom: "75-90pct_pendant_drops" },
+    }),
+    ...(!isNecklaceSet && isSet && { earrings: "exactly_2_if_included" }),
+  };
+
+  return [
+    "Generate a jewellery design sketch per this specification:",
+    JSON.stringify(spec),
+    "ABSOLUTE: flat-front view only | white background | portrait 3:4 canvas | all elements within 70% center zone | no labels, text, watermarks, or signatures",
+  ].join("\n\n");
+}
+
+// Legacy prose-blob prompt builder — kept for reference, not called in production
+export function buildImagePromptLegacy(request: DesignContext): string {
   // Use exactly what the user selected for stones
   let stonesList = request.stones && request.stones.length > 0 ? [...request.stones] : ["Polki"];
   
@@ -307,6 +378,9 @@ FINAL CHECK: The canvas is PORTRAIT (taller than wide). Before generating, verif
 
   return prompt;
 }
+
+// Alias for backward compatibility (not called — use buildImagePromptJSON)
+export const buildImagePrompt = buildImagePromptLegacy;
 
 // Generate jewellery sketch using Gemini 3 Pro Image Preview (superior text rendering and reasoning)
 export async function generateJewellerySketch(prompt: string): Promise<string> {

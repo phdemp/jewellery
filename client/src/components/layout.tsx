@@ -90,6 +90,14 @@ export function Layout({ children }: { children: ReactNode }) {
                 Marketing Visuals
               </span>
             </Link>
+            <Link href="/assortment">
+              <span
+                className={`cursor-pointer transition-colors ${location === "/assortment" ? "text-primary" : "text-muted-foreground hover:text-primary"}`}
+                data-testid="nav-assortment"
+              >
+                Assortment
+              </span>
+            </Link>
           </nav>
         </div>
       </header>
