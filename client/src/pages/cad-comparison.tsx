@@ -19,7 +19,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useToast } from "@/hooks/use-toast";
-import { MOTIF_GROUPS } from "@/lib/jewellery-logic";
+import { MOTIF_GROUPS, STYLE_INSPIRATIONS } from "@/lib/jewellery-logic";
 import { OrnamentalDivider } from "@/components/ornamental-divider";
 import { CostReport } from "@/components/cost-report";
 import {
@@ -28,7 +28,9 @@ import {
   DESIGN_SHAPE_MAP,
   STONE_NAME_COLOUR_MAP,
   ALL_STONE_NAMES,
-  STONE_SHAPES,
+  STONE_SHAPE_GROUPS,
+  stoneShapeSelectValue,
+  parseStoneShapeValue,
   type CADComparisonResult,
   type CADComparisonParams,
 } from "@/lib/api";
@@ -127,6 +129,7 @@ export default function CadComparison() {
   const [enamel, setEnamel] = useState("");
   const [finish, setFinish] = useState("");
   const [designShape, setDesignShape] = useState("");
+  const [styleInspiration, setStyleInspiration] = useState("");
   const [designType, setDesignType] = useState("");
   const [selectedTechniques, setSelectedTechniques] = useState<string[]>([]);
   const [earringStyle, setEarringStyle] = useState("");
@@ -276,13 +279,14 @@ export default function CadComparison() {
         motifs: selectedMotifs.length > 0 ? selectedMotifs : undefined,
         stoneName: selectedStoneNames.length > 0 ? selectedStoneNames : undefined,
         stoneNameColour: selectedStoneColours.length > 0 ? selectedStoneColours : undefined,
-        stoneShape: stoneShape || undefined,
+        stoneShape: stoneShape ? parseStoneShapeValue(stoneShape) : undefined,
         stoneSetting: stoneSetting || undefined,
         diamondSetting: diamondSetting || undefined,
         materialRatio: materialRatio || undefined,
         enamel: enamel || undefined,
         finish: finish || undefined,
         designShape: designShape || undefined,
+        styleInspiration: styleInspiration || undefined,
         designType: designType || undefined,
         techniques: selectedTechniques.length > 0 ? selectedTechniques : undefined,
         earringStyle: earringStyle || undefined,
@@ -542,8 +546,11 @@ export default function CadComparison() {
                     <SelectValue placeholder="Select stone shape" />
                   </SelectTrigger>
                   <SelectContent>
-                    {STONE_SHAPES.map(s => (
-                      <SelectItem key={s} value={s}>{s}</SelectItem>
+                    {Object.entries(STONE_SHAPE_GROUPS).map(([group, shapes]) => (
+                      <SelectGroup key={group}>
+                        <SelectLabel>{group}</SelectLabel>
+                        {shapes.map(s => <SelectItem key={`${group}-${s}`} value={stoneShapeSelectValue(group, s)}>{s}</SelectItem>)}
+                      </SelectGroup>
                     ))}
                   </SelectContent>
                 </Select>
@@ -610,6 +617,24 @@ export default function CadComparison() {
                   <SelectContent className="max-h-[200px]">
                     {FINISHES.map(f => (
                       <SelectItem key={f} value={f}>{f}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Style Inspiration */}
+              <div>
+                <Label className="font-serif">Style Inspiration</Label>
+                <Select value={styleInspiration} onValueChange={setStyleInspiration}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select style inspiration" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(STYLE_INSPIRATIONS).map(([group, styles]) => (
+                      <SelectGroup key={group}>
+                        <SelectLabel>{group}</SelectLabel>
+                        {styles.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                      </SelectGroup>
                     ))}
                   </SelectContent>
                 </Select>
@@ -787,7 +812,7 @@ export default function CadComparison() {
                 />
               </div>
 
-              <Button onClick={handleGenerate} disabled={isGenerating} className="w-full">
+              <Button onClick={handleGenerate} disabled={isGenerating || !productSegment || !category} className="w-full">
                 {isGenerating ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />

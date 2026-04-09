@@ -14,6 +14,7 @@ export type DesignRequest = {
   enamel?: string;
   finish?: string;
   designShape?: string;
+  styleInspiration?: string;
   designType?: string;
   techniques?: string[];
   earringStyle?: string;
@@ -93,6 +94,12 @@ export const STONES = [
   "Navratna",
   "Amethyst"
 ];
+
+export const STYLE_INSPIRATIONS: Record<string, string[]> = {
+  "Global Styles": ["Cartier", "Bvlgari", "Van Cleef & Arpels", "Harry Winston", "Chaumet", "Graff"],
+  "Indian Styles": ["Sabyasachi Jewellery", "Amrapali Jewels", "Tanishq", "Kalyan Jewellers"],
+  "Generic Styles": ["Royal / Heritage", "Contemporary Minimal", "Bold Statement", "Floral / Nature-Inspired", "Temple Jewellery", "Fusion (Modern + Traditional)"],
+};
 
 export const PRICE_RANGES = [
   "Up to 8L", "15L+", "Premium"

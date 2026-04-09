@@ -215,7 +215,7 @@ export function buildImagePromptJSON(
   }
 
   // Style from RAG references or brand defaults
-  const refDesign = !isPurePolki && request.similarDesigns?.length
+  const refDesign = request.similarDesigns?.length
     ? request.similarDesigns[0]
     : null;
   spec.style = {

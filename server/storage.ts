@@ -19,7 +19,7 @@ import {
   assortmentPlans,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, sql } from "drizzle-orm";
+import { eq, desc, sql, inArray } from "drizzle-orm";
 
 export interface IStorage {
   // Reference Image methods
@@ -56,6 +56,11 @@ export interface IStorage {
 
   // Recommendation helper
   getStockItemsForRecommendation(category: string, avgPrice: number, limit: number): Promise<StockItem[]>;
+  findMatchingEarring(setStyleNo: string, earringCategory: string): Promise<StockItem | null>;
+
+  // State helpers
+  getDistinctStates(): Promise<string[]>;
+  getStockCandidatePool(category: string, limit: number): Promise<StockItem[]>;
 
   // Assortment Plan methods
   createAssortmentPlan(data: InsertAssortmentPlan): Promise<AssortmentPlan>;
@@ -146,7 +151,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getDistinctBdmNames(): Promise<string[]> {
-    const rows = await db.execute(sql`SELECT DISTINCT bdm_name FROM b2c_sales ORDER BY bdm_name`);
+    const rows = await db.execute(sql`SELECT DISTINCT bdm_name FROM b2c_sales WHERE bdm_name IS NOT NULL AND TRIM(bdm_name) <> '' AND bdm_name NOT IN ('Blank', 'RJPL Directors', 'Ganesh Sharma', 'Retail', 'Finish Goods') ORDER BY bdm_name`);
     return (rows.rows as { bdm_name: string }[]).map(r => r.bdm_name);
   }
 
@@ -174,7 +179,7 @@ export class DatabaseStorage implements IStorage {
   async getStockItemsByStyleNos(styleNos: string[]): Promise<StockItem[]> {
     if (styleNos.length === 0) return [];
     return await db.select().from(stockItems)
-      .where(sql`${stockItems.styleNo} = ANY(${styleNos})`);
+      .where(inArray(stockItems.styleNo, styleNos));
   }
 
   async updateStockItem(id: string, data: Partial<StockItem>): Promise<void> {
@@ -198,6 +203,30 @@ export class DatabaseStorage implements IStorage {
       .where(sql`${stockItems.category} = ${category} AND ${stockItems.status} = 'On Hand' AND TRIM(${stockItems.imageUrl}) <> '' AND ${stockItems.imageUrl} IS NOT NULL`)
       .orderBy(sql`ABS(${stockItems.tagPrice} - ${avgPrice})`)
       .limit(limit);
+  }
+
+  // ── State helpers ──────────────────────────────────────────────────────
+
+  async getDistinctStates(): Promise<string[]> {
+    const rows = await db.execute(sql`SELECT DISTINCT state_name FROM b2c_sales WHERE state_name IS NOT NULL AND TRIM(state_name) <> '' AND state_name <> 'None' ORDER BY state_name`);
+    return (rows.rows as { state_name: string }[]).map(r => r.state_name);
+  }
+
+  async getStockCandidatePool(category: string, limit: number): Promise<StockItem[]> {
+    return await db.select().from(stockItems)
+      .where(sql`${stockItems.category} = ${category} AND ${stockItems.status} = 'On Hand' AND TRIM(${stockItems.imageUrl}) <> '' AND ${stockItems.imageUrl} IS NOT NULL`)
+      .limit(limit);
+  }
+
+  // ── Matching earring lookup ────────────────────────────────────────────
+
+  async findMatchingEarring(setStyleNo: string, earringCategory: string): Promise<StockItem | null> {
+    const baseStyle = setStyleNo.replace(/-\d+$/, "");
+    const earringPattern = baseStyle + "E";
+    const rows = await db.select().from(stockItems)
+      .where(sql`${stockItems.styleNo} LIKE ${earringPattern + "%"} AND ${stockItems.category} = ${earringCategory} AND ${stockItems.status} = 'On Hand' AND TRIM(${stockItems.imageUrl}) <> '' AND ${stockItems.imageUrl} IS NOT NULL`)
+      .limit(1);
+    return rows[0] ?? null;
   }
 
   // ── Assortment Plan methods ─────────────────────────────────────────────

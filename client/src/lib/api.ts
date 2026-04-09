@@ -141,7 +141,7 @@ export async function generateDesign(request: DesignRequest, styleOverride?: Fil
   // String fields — only append if non-empty
   const stringFields: (keyof DesignRequest)[] = [
     'productSegment', 'priceBand', 'polkiSetting',
-    'enamel', 'finish', 'designShape', 'designType', 'earringStyle', 'materialRatio',
+    'enamel', 'finish', 'designShape', 'styleInspiration', 'designType', 'earringStyle', 'materialRatio',
     'talaf', 'piroiPlacement', 'piroiColour', 'stoneShape', 'stoneSetting', 'diamondSetting', 'goldPurity', 'customNotes',
   ];
   for (const key of stringFields) {
@@ -333,6 +333,7 @@ export interface ModifyDesignParams {
   enamel?: string;
   finish?: string;
   designShape?: string;
+  styleInspiration?: string;
   designType?: string;
   techniques?: string[];
   earringStyle?: string;
@@ -514,7 +515,7 @@ export const STONE_NAME_COLOUR_MAP: Record<string, string[]> = {
   "Opal": ["Multi Color"],
   "Ruby": ["Red"],
   "Tanzanite": ["Blue", "Violet"],
-  "Tourmaline": ["Multi Color"],
+  "Tourmaline": ["Paraiba", "Pink", "Green", "Watermelon", "Yellow", "Orangish Brown", "Indigolite", "Blue", "Rubelite", "Brown", "Olive Green"],
   "Synthetic Stone": ["Multi Color"],
   "Pearl": ["White", "Cream"],
   "Basra Pearl": ["White", "Cream"],
@@ -532,7 +533,39 @@ export const STONE_NAME_COLOUR_MAP: Record<string, string[]> = {
 
 export const ALL_STONE_NAMES = Object.keys(STONE_NAME_COLOUR_MAP);
 
-export const STONE_SHAPES = ["Round", "Oval", "Pearl", "Square", "Hexagon", "Kite", "Tumble Stones"] as const;
+export const STONE_SHAPE_GROUPS: Record<string, string[]> = {
+  "Faceted": [
+    "Faceted Round", "Faceted Oval", "Faceted Pear", "Faceted Square",
+    "Faceted Cushion", "Faceted Elongated Cushion", "Emerald Cut",
+    "Faceted Marquise", "Faceted Heart", "Faceted Hexagon",
+    "Faceted Lozenge", "Faceted Pentagon", "Faceted Kite", "Faceted Trillion",
+  ],
+  "Rose Cut": [
+    "Rose Cut Round", "Rose Cut Oval", "Rose Cut Pear",
+  ],
+  "Cabochon": [
+    "Cabochon Round", "Cabochon Oval", "Cabochon Pear", "Cabochon Square",
+    "Cabochon Cushion", "Cabochon Elongated Cushion", "Emerald Cut",
+    "Cabochon Marquise", "Cabochon Heart", "Cabochon Trillion",
+  ],
+  "Carved / Special": [
+    "Carved Round", "Carved Oval", "Carved Pear", "Carved Square",
+    "Carved Cushion", "Barrel", "Cylindrical", "Snowflake", "Flower", "Clover Leaf",
+  ],
+};
+
+export const STONE_SHAPES = Object.values(STONE_SHAPE_GROUPS).flat();
+
+/** Create a unique Select value for stone shapes (handles duplicates like "Emerald Cut" across groups) */
+export function stoneShapeSelectValue(group: string, shape: string): string {
+  return `${group}::${shape}`;
+}
+
+/** Extract the display/API shape name from a group-prefixed Select value */
+export function parseStoneShapeValue(value: string): string {
+  const idx = value.indexOf("::");
+  return idx >= 0 ? value.slice(idx + 2) : value;
+}
 
 export const GOLD_PURITIES = ["9k", "14k", "18k", "22k"] as const;
 
@@ -563,6 +596,7 @@ export interface CADComparisonParams {
   enamel?: string;
   finish?: string;
   designShape?: string;
+  styleInspiration?: string;
   designType?: string;
   techniques?: string[];
   earringStyle?: string;
@@ -762,7 +796,7 @@ export async function modifyDesign(
 
   const stringFields: (keyof ModifyDesignParams)[] = [
     'productSegment', 'category', 'priceBand', 'polkiSetting', 'motifCategory',
-    'enamel', 'finish', 'designShape', 'designType', 'earringStyle', 'materialRatio',
+    'enamel', 'finish', 'designShape', 'styleInspiration', 'designType', 'earringStyle', 'materialRatio',
     'talaf', 'piroiPlacement', 'piroiColour', 'stoneShape', 'stoneSetting', 'diamondSetting', 'customNotes',
   ];
 
@@ -828,6 +862,9 @@ export interface StockItemSummary {
   collectionName: string | null;
   subCategory: string | null;
   priceMatch: number;
+  stockType?: string | null;
+  ageingDays?: number | null;
+  score?: number;
 }
 
 export interface AssortmentRecommendation {
@@ -836,6 +873,7 @@ export interface AssortmentRecommendation {
   avgPrice: number;
   suggested: StockItemSummary | null;
   alternatives: StockItemSummary[];
+  matchedEarring?: StockItemSummary | null;
 }
 
 export interface BdmProfile {
@@ -843,6 +881,15 @@ export interface BdmProfile {
   totalSales: number;
   totalRevenue: number;
   topCategories: { category: string; count: number; revenue: number }[];
+  avgStockAge?: number;
+  stockTypeBreakdown?: { stockType: string; percentage: number }[];
+}
+
+export interface StateSummary {
+  stateName: string;
+  totalSales: number;
+  totalRevenue: number;
+  topCategories: { category: string; count: number; revenue: number; avgPrice: number }[];
 }
 
 export interface AssortmentRecommendationResponse {
@@ -879,17 +926,30 @@ export async function getAssortmentBdmProfile(bdmName: string): Promise<{
 
 export async function generateAssortmentRecommendations(
   bdmName: string,
-  topK?: number
+  topK?: number,
+  stateName?: string
 ): Promise<AssortmentRecommendationResponse> {
   const res = await fetch("/api/assortment/generate-recommendations", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ bdmName, topK }),
+    body: JSON.stringify({ bdmName, topK, stateName }),
   });
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || "Failed to generate recommendations");
   }
+  return res.json();
+}
+
+export async function getAssortmentStateList(): Promise<{ states: string[] }> {
+  const res = await fetch("/api/assortment/state-list");
+  if (!res.ok) throw new Error("Failed to fetch state list");
+  return res.json();
+}
+
+export async function getAssortmentStateSummary(stateName: string): Promise<StateSummary> {
+  const res = await fetch(`/api/assortment/state-summary/${encodeURIComponent(stateName)}`);
+  if (!res.ok) throw new Error("Failed to fetch state summary");
   return res.json();
 }
 
