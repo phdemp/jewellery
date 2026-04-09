@@ -3,7 +3,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
-import { referenceImages } from "@shared/schema";
+import { referenceImages, b2cSales as b2cSalesTable } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
 import multer from "multer";
 import path from "path";
@@ -38,6 +38,26 @@ import { insertDesignProjectSchema, insertReferenceImageSchema, driveImportReque
 import { extractFolderId, listImagesInFolder, downloadImage } from "./google-drive";
 import { searchSimilarStockItems } from "./stock-vector-store";
 import { read as xlsxRead, utils as xlsxUtils } from "xlsx";
+
+// ── Style Inspiration Descriptions ──────────────────────────────────────────
+const STYLE_INSPIRATION_DESCRIPTIONS: Record<string, string> = {
+  "Cartier": "Cartier-inspired: clean geometric lines, Art Deco symmetry, panther motifs, bold bezels, refined luxury with minimal ornamentation",
+  "Bvlgari": "Bvlgari-inspired: bold Italian design, cabochon-cut colored gemstones, chunky gold links, Roman coin motifs, vibrant color contrasts",
+  "Van Cleef & Arpels": "Van Cleef & Arpels-inspired: Alhambra clover motifs, Mystery Set technique, delicate floral filigree, feminine whimsy, nature-inspired fantasy",
+  "Harry Winston": "Harry Winston-inspired: maximum diamond coverage, cluster settings, wreath/floral arrangements of large stones, platinum-look metalwork, red-carpet glamour",
+  "Chaumet": "Chaumet-inspired: French neoclassical tiara heritage, laurel-leaf motifs, delicate milgrain edges, regal symmetry, wheat-sheaf patterns",
+  "Graff": "Graff-inspired: dramatic oversized stones, cascading diamond drops, bold statement pieces, extraordinary carat weight, clean modern lines",
+  "Sabyasachi Jewellery": "Sabyasachi-inspired: heritage Bengal craft, heavy uncut polki sets, Victorian-colonial fusion, jadau technique, ornate layered necklaces with traditional Indian maximalism",
+  "Amrapali Jewels": "Amrapali-inspired: Rajasthani royal jewellery, traditional kundan-meena, tribal-meets-luxury, silver and gold mix, intricate hand-crafted motifs from Jaipur tradition",
+  "Tanishq": "Tanishq-inspired: modern Indian elegance, lightweight wearable designs, contemporary interpretation of traditional motifs, refined gold craftsmanship, accessible luxury",
+  "Kalyan Jewellers": "Kalyan-inspired: South Indian temple jewellery influence, antique gold finish, traditional motifs (mango, peacock, temple), rich heritage craftsmanship",
+  "Royal / Heritage": "Royal heritage style: regal opulence, symmetrical layouts, heavy polki coverage, jadau craftsmanship, Mughal-inspired arches and florals, palatial grandeur",
+  "Contemporary Minimal": "Contemporary minimal style: clean lines, negative space, geometric forms, understated elegance, sleek bezels, modern silhouettes with minimal ornamentation",
+  "Bold Statement": "Bold statement style: oversized proportions, dramatic visual impact, chunky forms, maximalist approach, eye-catching centerpiece design",
+  "Floral / Nature-Inspired": "Floral nature-inspired style: organic flowing lines, realistic flower and leaf motifs, vine tendrils, petal-shaped settings, garden-inspired arrangements",
+  "Temple Jewellery": "Temple jewellery style: South Indian devotional motifs (Lakshmi, peacock, mango), heavy antique gold, rubies and emeralds in traditional settings, ornate layered design",
+  "Fusion (Modern + Traditional)": "Fusion style: blend traditional Indian craft (kundan, polki) with contemporary Western silhouettes, mix heritage motifs with modern geometry, East-meets-West aesthetic",
+};
 
 // Configure multer for file uploads (disk storage for reference images)
 const diskStorage = multer.diskStorage({
@@ -562,6 +582,7 @@ export async function registerRoutes(
       const piroiPlacement = req.body.piroiPlacement || "";
       const piroiColour = req.body.piroiColour || "";
       const customNotes = req.body.customNotes || undefined;
+      const styleInspiration = req.body.styleInspiration || "";
       const styleOverrideFile = req.file;
       const mode = (req.body.mode as string) === "cad" ? "cad" : "sketch";
 
@@ -646,6 +667,7 @@ export async function registerRoutes(
       if (talaf && talaf !== "None") extras.talaf = talaf;
       if (piroiPlacement && piroiPlacement !== "None") extras.piroi_placement = piroiPlacement;
       if (piroiColour && piroiColour !== "None") extras.piroi_colour = piroiColour;
+      if (styleInspiration) extras.style_inspiration = STYLE_INSPIRATION_DESCRIPTIONS[styleInspiration] || styleInspiration;
 
       // Build context with brand rules and similar designs
       const resolvedMotifs = motifs.includes("Any")
@@ -1346,6 +1368,11 @@ export async function registerRoutes(
       if (req.body.piroiPlacement && req.body.piroiPlacement !== "None") lines.push(`Piroi Placement: ${req.body.piroiPlacement}`);
       if (req.body.piroiColour && req.body.piroiColour !== "None") lines.push(`Piroi Colour: ${req.body.piroiColour}`);
       if (req.body.customNotes) lines.push(`\nAdditional Instructions: ${req.body.customNotes}`);
+      const modifyStyleInspiration = req.body.styleInspiration || "";
+      if (modifyStyleInspiration) {
+        const desc = STYLE_INSPIRATION_DESCRIPTIONS[modifyStyleInspiration] || modifyStyleInspiration;
+        lines.push(`Style Inspiration: ${desc}`);
+      }
 
       const editPrompt = lines.join("\n") + (modifyPolkiConstraint ? "\n\n" + modifyPolkiConstraint : "");
       const resolvedPath = path.resolve(inputPath);
@@ -1478,7 +1505,7 @@ export async function registerRoutes(
       const {
         productSegment, category, priceBand, polkiSize, polkiSetting: reqPolkiSetting, motifCategory,
         motifs, stoneName, stoneNameColour, stoneShape, stoneSetting: reqStoneSetting, diamondSetting: reqDiamondSetting, materialRatio,
-        enamel, finish, designShape, designType: cadDesignType, earringStyle,
+        enamel, finish, designShape, styleInspiration: cadStyleInspiration, designType: cadDesignType, earringStyle,
         talaf, piroiPlacement, piroiColour, customNotes,
         theme,
       } = req.body;
@@ -1550,6 +1577,7 @@ export async function registerRoutes(
       if (talaf) cadExtras.talaf = talaf as string;
       if (piroiPlacement) cadExtras.piroi_placement = piroiPlacement as string;
       if (piroiColour) cadExtras.piroi_colour = piroiColour as string;
+      if (cadStyleInspiration) cadExtras.style_inspiration = STYLE_INSPIRATION_DESCRIPTIONS[cadStyleInspiration as string] || cadStyleInspiration as string;
       const cadPrompt = buildCADPromptJSON(context, cadExtras);
 
       // Generate both models in parallel — same prompt, different engines
@@ -1871,6 +1899,7 @@ export async function registerRoutes(
       const polkiSetting: string = req.body.polkiSetting || "";
       const stoneSetting: string = req.body.stoneSetting || "";
       const diamondSetting: string = req.body.diamondSetting || "";
+      const debugStyleInspiration: string = req.body.styleInspiration || "";
 
       // Build extras for JSON prompt (same logic as generate-design)
       const priceBandGuidance = priceBand ? PRICE_BAND_DESIGN_GUIDANCE[priceBand] || "" : "";
@@ -1902,6 +1931,7 @@ export async function registerRoutes(
       if (talaf && talaf !== "None") extras.talaf = talaf;
       if (piroiPlacement && piroiPlacement !== "None") extras.piroi_placement = piroiPlacement;
       if (piroiColour && piroiColour !== "None") extras.piroi_colour = piroiColour;
+      if (debugStyleInspiration) extras.style_inspiration = STYLE_INSPIRATION_DESCRIPTIONS[debugStyleInspiration] || debugStyleInspiration;
 
       // Build context and image prompt (same logic as generate-design, no RAG)
       const debugResolvedMotifs = motifs.includes("Any")
@@ -1979,28 +2009,33 @@ export async function registerRoutes(
   // ── Import sales data from Excel ────────────────────────────────────────
   app.post("/api/assortment/import-sales", async (_req, res) => {
     try {
-      const filePath = path.resolve("b2c sales data YEAR.xlsx");
+      const filePath = path.resolve("b2b sales data 1 YEAR.xlsx");
       const workbook = xlsxRead(await fs.readFile(filePath));
-      // Target "DATA SHEET1" (index 3)
-      const sheetName = workbook.SheetNames[3] || workbook.SheetNames[0];
+      // Target "Sheet1" (index 0)
+      const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
       const rows = xlsxUtils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
 
       const toInt = (v: unknown) => v ? Math.round(Number(v)) || null : null;
+      const excelSerialToDate = (v: unknown): string => {
+        const n = Number(v);
+        if (!n || isNaN(n)) return String(v || "");
+        return new Date((n - 25569) * 86400000).toISOString().slice(0, 10);
+      };
       const sales = rows.map(row => ({
         styleCode: String(row["StyleCode"] || ""),
-        bdmName: String(row["DEPT"] || ""),
-        jewelSoce: String(row["JEWEJL SOCE"] || row["JEWEL SOCE"] || ""),
-        tag: String(row["TAG"] || ""),
+        bdmName: String(row["SalesPersonName"] || ""),
+        jewelSoce: "",
+        tag: String(row["TagPrice"] || ""),
         transPrice: toInt(row["TransPrice"]),
         stateName: String(row["StateName"] || ""),
         pureWt: String(row["PureWt"] || ""),
-        category: String(row["CAT"] || ""),
+        category: String(row["Category"] || ""),
         makeDays: toInt(row["MakeDays"]),
         billingType: String(row["BillingType"] || ""),
-        transactionDate: String(row["TRASACTION DATE"] || row["TRANSACTION DATE"] || ""),
+        transactionDate: excelSerialToDate(row["JewelTransDate"]),
         stock: String(row["Stock"] || ""),
-        cost: toInt(row["COST"]),
+        cost: null,
       })).filter(s => s.styleCode !== "");
 
       await storage.clearB2cSales();
@@ -2203,11 +2238,54 @@ export async function registerRoutes(
   // ── Generate AI recommendations ─────────────────────────────────────────
   app.post("/api/assortment/generate-recommendations", async (req, res) => {
     try {
-      const { bdmName, topK = 8 } = req.body as { bdmName: string; topK?: number };
+      const { bdmName, stateName, topK = 8 } = req.body as { bdmName: string; stateName?: string; topK?: number };
       if (!bdmName) return res.status(400).json({ error: "bdmName is required" });
 
       const sales = await storage.getSalesByBdm(bdmName);
       if (sales.length === 0) return res.status(404).json({ error: "No sales found for this BDM" });
+
+      // ── A) Compute BDM's stock-type distribution ──────────────────────
+      const uniqueStyleCodes = Array.from(new Set(sales.map(s => s.styleCode)));
+      const soldStockItems = await storage.getStockItemsByStyleNos(uniqueStyleCodes);
+
+      // Stock type frequency map (fraction 0-1)
+      const stockTypeCount = new Map<string, number>();
+      let totalWithType = 0;
+      for (const item of soldStockItems) {
+        if (item.stockType) {
+          stockTypeCount.set(item.stockType, (stockTypeCount.get(item.stockType) || 0) + 1);
+          totalWithType++;
+        }
+      }
+      const stockTypeFreq = new Map<string, number>();
+      Array.from(stockTypeCount.entries()).forEach(([type, count]) => {
+        stockTypeFreq.set(type, totalWithType > 0 ? count / totalWithType : 0);
+      });
+
+      // Average stock age from sold items
+      const agesOfSold = soldStockItems.filter(i => i.ageingDays != null).map(i => i.ageingDays!);
+      const avgStockAge = agesOfSold.length > 0 ? Math.round(agesOfSold.reduce((a, b) => a + b, 0) / agesOfSold.length) : 0;
+
+      // Stock type breakdown (top entries)
+      const stockTypeBreakdown = Array.from(stockTypeCount.entries())
+        .map(([stockType, count]) => ({ stockType, percentage: totalWithType > 0 ? Math.round((count / totalWithType) * 100) : 0 }))
+        .sort((a, b) => b.percentage - a.percentage);
+
+      // ── B) State-influenced price blending ────────────────────────────
+      let stateCatPrices = new Map<string, { count: number; avgPrice: number }>();
+      if (stateName) {
+        const stateSales = await db.select().from(b2cSalesTable)
+          .where(sql`${b2cSalesTable.stateName} = ${stateName}`);
+        const sCatMap = new Map<string, { count: number; revenue: number }>();
+        for (const s of stateSales) {
+          const cat = s.category || "Unknown";
+          const existing = sCatMap.get(cat) || { count: 0, revenue: 0 };
+          sCatMap.set(cat, { count: existing.count + 1, revenue: existing.revenue + (s.transPrice || 0) });
+        }
+        Array.from(sCatMap.entries()).forEach(([cat, data]) => {
+          stateCatPrices.set(cat, { count: data.count, avgPrice: data.count > 0 ? Math.round(data.revenue / data.count) : 0 });
+        });
+      }
 
       // Aggregate top 5 categories
       const catMap = new Map<string, { count: number; revenue: number }>();
@@ -2224,38 +2302,102 @@ export async function registerRoutes(
       const recommendations = [];
 
       for (const cat of topCats) {
-        const avgPrice = cat.count > 0 ? Math.round(cat.revenue / cat.count) : 0;
+        const bdmAvgPrice = cat.count > 0 ? Math.round(cat.revenue / cat.count) : 0;
 
-        const candidates = await storage.getStockItemsForRecommendation(cat.category, avgPrice, topK);
+        // Blend with state avg price if available
+        const stateData = stateCatPrices.get(cat.category);
+        const avgPrice = stateData
+          ? Math.round(0.7 * bdmAvgPrice + 0.3 * stateData.avgPrice)
+          : bdmAvgPrice;
 
-        const toSummary = (item: typeof candidates[0]) => {
+        // ── C) New 80/20 scoring ──────────────────────────────────────
+        const candidates = await storage.getStockCandidatePool(cat.category, 40);
+
+        // Find max ageing days in pool for normalization
+        const maxAge = candidates.reduce((m, c) => Math.max(m, c.ageingDays || 0), 1);
+
+        const scored = candidates.map(item => {
+          const stockTypeScore = stockTypeFreq.get(item.stockType || "") || 0;
+          const ageScore = (item.ageingDays || 0) / maxAge;
+          const finalScore = 0.8 * stockTypeScore + 0.2 * ageScore;
+
           const priceDiff = item.tagPrice && avgPrice > 0
             ? 1 - Math.abs((item.tagPrice - avgPrice) / avgPrice)
             : 0;
+
           return {
-            id: item.id,
-            jewelCode: item.jewelCode,
-            styleNo: item.styleNo,
-            imageUrl: proxyDriveUrl(item.imageUrl),
-            category: item.category,
-            tagPrice: item.tagPrice,
-            status: item.status,
-            grossWt: item.grossWt,
-            pureWt: item.pureWt,
-            collectionName: item.collectionName,
-            subCategory: item.subCategory,
+            item,
+            score: Math.round(finalScore * 100) / 100,
             priceMatch: Math.max(0, Math.round(priceDiff * 100)) / 100,
           };
+        });
+
+        // Sort by finalScore desc, take top topK
+        scored.sort((a, b) => b.score - a.score);
+        const topScored = scored.slice(0, topK);
+
+        const toSummary = (entry: typeof topScored[0]) => ({
+          id: entry.item.id,
+          jewelCode: entry.item.jewelCode,
+          styleNo: entry.item.styleNo,
+          imageUrl: proxyDriveUrl(entry.item.imageUrl),
+          category: entry.item.category,
+          tagPrice: entry.item.tagPrice,
+          status: entry.item.status,
+          grossWt: entry.item.grossWt,
+          pureWt: entry.item.pureWt,
+          collectionName: entry.item.collectionName,
+          subCategory: entry.item.subCategory,
+          priceMatch: entry.priceMatch,
+          stockType: entry.item.stockType,
+          ageingDays: entry.item.ageingDays,
+          score: entry.score,
+        });
+
+        // ── Earring matching for set categories ──────────────────────
+        const SET_TO_EARRING: Record<string, string> = {
+          "CHOKAR SET": "CHOKAR SET EARRING",
+          "NECKLACE SET": "NECKLACE SET EARRING",
+          "LONG NECKLACE SET": "LONG NECKLACE SET EARRING",
+          "CHAIN NECKLACE SET": "CHAIN NECKLACE SET EARRING",
+          "PENDANT SET": "PENDANT SET EARRING",
+          "LONG PENDANT SET": "LONG PENDANT SET EARRING",
         };
 
-        if (candidates.length > 0) {
+        let matchedEarring = null;
+        const earringCat = SET_TO_EARRING[cat.category];
+        if (earringCat && topScored.length > 0) {
+          const earringItem = await storage.findMatchingEarring(topScored[0].item.styleNo, earringCat);
+          if (earringItem) {
+            matchedEarring = {
+              id: earringItem.id,
+              jewelCode: earringItem.jewelCode,
+              styleNo: earringItem.styleNo,
+              imageUrl: proxyDriveUrl(earringItem.imageUrl),
+              category: earringItem.category,
+              tagPrice: earringItem.tagPrice,
+              status: earringItem.status,
+              grossWt: earringItem.grossWt,
+              pureWt: earringItem.pureWt,
+              collectionName: earringItem.collectionName,
+              subCategory: earringItem.subCategory,
+              priceMatch: 0,
+              stockType: earringItem.stockType,
+              ageingDays: earringItem.ageingDays,
+              score: 0,
+            };
+          }
+        }
+
+        if (topScored.length > 0) {
           recommendations.push({
             category: cat.category,
             salesCount: cat.count,
             avgPrice,
             totalOnHand: candidates.length,
-            suggested: toSummary(candidates[0]),
-            alternatives: candidates.slice(1).map(toSummary),
+            suggested: toSummary(topScored[0]),
+            alternatives: topScored.slice(1).map(toSummary),
+            matchedEarring,
           });
         } else {
           recommendations.push({
@@ -2265,6 +2407,7 @@ export async function registerRoutes(
             totalOnHand: 0,
             suggested: null,
             alternatives: [],
+            matchedEarring: null,
           });
         }
       }
@@ -2276,6 +2419,8 @@ export async function registerRoutes(
         totalSales: sales.length,
         totalRevenue,
         topCategories: topCats,
+        avgStockAge,
+        stockTypeBreakdown,
       };
 
       res.json({ bdmName, recommendations, profile });
@@ -2304,6 +2449,53 @@ export async function registerRoutes(
       res.send(Buffer.from(arrayBuf));
     } catch {
       res.status(502).json({ error: "Image proxy error" });
+    }
+  });
+
+  // ── State list ─────────────────────────────────────────────────────────
+  app.get("/api/assortment/state-list", async (_req, res) => {
+    try {
+      const states = await storage.getDistinctStates();
+      res.json({ states });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // ── State summary ────────────────────────────────────────────────────
+  app.get("/api/assortment/state-summary/:stateName", async (req, res) => {
+    try {
+      const { stateName } = req.params;
+      const allSales = await db.select().from(b2cSalesTable)
+        .where(sql`${b2cSalesTable.stateName} = ${stateName}`);
+
+      const totalRevenue = allSales.reduce((s, r) => s + (r.transPrice || 0), 0);
+
+      const catMap = new Map<string, { count: number; revenue: number }>();
+      for (const s of allSales) {
+        const cat = s.category || "Unknown";
+        const existing = catMap.get(cat) || { count: 0, revenue: 0 };
+        catMap.set(cat, { count: existing.count + 1, revenue: existing.revenue + (s.transPrice || 0) });
+      }
+      const topCategories = Array.from(catMap.entries())
+        .map(([category, data]) => ({
+          category,
+          count: data.count,
+          revenue: data.revenue,
+          avgPrice: data.count > 0 ? Math.round(data.revenue / data.count) : 0,
+        }))
+        .sort((a, b) => b.count - a.count);
+
+      res.json({
+        stateName,
+        totalSales: allSales.length,
+        totalRevenue,
+        topCategories,
+      });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
     }
   });
 

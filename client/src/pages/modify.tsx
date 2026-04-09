@@ -10,7 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useToast } from "@/hooks/use-toast";
-import { modifyDesign, type ModifyDesignParams, type ModifyDesignResponse, SEGMENT_CATEGORY_PRICE_MAP, DESIGN_SHAPE_MAP, STONE_NAME_COLOUR_MAP, ALL_STONE_NAMES, STONE_SHAPES } from "@/lib/api";
+import { modifyDesign, type ModifyDesignParams, type ModifyDesignResponse, SEGMENT_CATEGORY_PRICE_MAP, DESIGN_SHAPE_MAP, STONE_NAME_COLOUR_MAP, ALL_STONE_NAMES, STONE_SHAPE_GROUPS, stoneShapeSelectValue, parseStoneShapeValue } from "@/lib/api";
+import { STYLE_INSPIRATIONS } from "@/lib/jewellery-logic";
 import { Loader2, Upload, X, ImageIcon } from "lucide-react";
 import { CostReport } from "@/components/cost-report";
 
@@ -111,6 +112,7 @@ interface FormValues {
   enamel: string;
   finish: string;
   designShape: string;
+  styleInspiration: string;
   designType: string;
   techniques: string[];
   earringStyle: string;
@@ -152,6 +154,7 @@ export default function ModifyPage() {
       stoneSetting: "",
       diamondSetting: "",
       enamel: "",
+      styleInspiration: "",
       designType: "",
       techniques: [],
       goldRatePerGram: 7000,
@@ -317,6 +320,7 @@ export default function ModifyPage() {
         enamel: values.enamel || undefined,
         finish: values.finish || undefined,
         designShape: values.designShape || undefined,
+        styleInspiration: values.styleInspiration || undefined,
         designType: values.designType || undefined,
         techniques: values.techniques?.length ? values.techniques : undefined,
         earringStyle: values.earringStyle || undefined,
@@ -329,7 +333,7 @@ export default function ModifyPage() {
         piroiColour: values.piroiColour !== "None" ? values.piroiColour : undefined,
         stoneName: values.stoneName?.length ? values.stoneName : undefined,
         stoneNameColour: values.stoneNameColour?.length ? values.stoneNameColour : undefined,
-        stoneShape: values.stoneShape || undefined,
+        stoneShape: values.stoneShape ? parseStoneShapeValue(values.stoneShape) : undefined,
         stoneSetting: values.stoneSetting || undefined,
         diamondSetting: values.diamondSetting || undefined,
         customNotes: values.customNotes || undefined,
@@ -634,7 +638,12 @@ export default function ModifyPage() {
               <Select onValueChange={v => setValue("stoneShape", v)}>
                 <SelectTrigger><SelectValue placeholder="Select stone shape" /></SelectTrigger>
                 <SelectContent>
-                  {STONE_SHAPES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                  {Object.entries(STONE_SHAPE_GROUPS).map(([group, shapes]) => (
+                    <SelectGroup key={group}>
+                      <SelectLabel>{group}</SelectLabel>
+                      {shapes.map(s => <SelectItem key={`${group}-${s}`} value={stoneShapeSelectValue(group, s)}>{s}</SelectItem>)}
+                    </SelectGroup>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -693,6 +702,22 @@ export default function ModifyPage() {
                 <SelectTrigger><SelectValue placeholder="Select finish" /></SelectTrigger>
                 <SelectContent>
                   {FINISHES.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Style Inspiration */}
+            <div className="space-y-1.5">
+              <Label className="font-serif text-sm font-medium">Style Inspiration</Label>
+              <Select value={watch("styleInspiration") || ""} onValueChange={v => setValue("styleInspiration", v)}>
+                <SelectTrigger><SelectValue placeholder="Select style inspiration" /></SelectTrigger>
+                <SelectContent>
+                  {Object.entries(STYLE_INSPIRATIONS).map(([group, styles]) => (
+                    <SelectGroup key={group}>
+                      <SelectLabel>{group}</SelectLabel>
+                      {styles.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                    </SelectGroup>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
