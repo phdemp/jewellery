@@ -82,40 +82,40 @@ Requirements for initial release. Each maps to roadmap phases.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SCHEMA-01 | TBD | Pending |
-| SCHEMA-02 | TBD | Pending |
-| SCHEMA-03 | TBD | Pending |
-| SUBMIT-01 | TBD | Pending |
-| SUBMIT-02 | TBD | Pending |
-| SUBMIT-03 | TBD | Pending |
-| SUBMIT-04 | TBD | Pending |
-| SUBMIT-05 | TBD | Pending |
-| SUBMIT-06 | TBD | Pending |
-| STORE-01 | TBD | Pending |
-| STORE-02 | TBD | Pending |
-| STORE-03 | TBD | Pending |
-| STORE-04 | TBD | Pending |
-| ENRICH-01 | TBD | Pending |
-| ENRICH-02 | TBD | Pending |
-| ENRICH-03 | TBD | Pending |
-| ENRICH-04 | TBD | Pending |
-| API-01 | TBD | Pending |
-| API-02 | TBD | Pending |
-| API-03 | TBD | Pending |
-| API-04 | TBD | Pending |
-| API-05 | TBD | Pending |
-| MGMT-01 | TBD | Pending |
-| MGMT-02 | TBD | Pending |
-| MGMT-03 | TBD | Pending |
-| MGMT-04 | TBD | Pending |
-| MGMT-05 | TBD | Pending |
-| MGMT-06 | TBD | Pending |
+| SCHEMA-01 | Phase 1 | Pending |
+| SCHEMA-02 | Phase 1 | Pending |
+| SCHEMA-03 | Phase 1 | Pending |
+| SUBMIT-01 | Phase 5 | Pending |
+| SUBMIT-02 | Phase 5 | Pending |
+| SUBMIT-03 | Phase 5 | Pending |
+| SUBMIT-04 | Phase 5 | Pending |
+| SUBMIT-05 | Phase 5 | Pending |
+| SUBMIT-06 | Phase 5 | Pending |
+| STORE-01 | Phase 2 | Pending |
+| STORE-02 | Phase 2 | Pending |
+| STORE-03 | Phase 2 | Pending |
+| STORE-04 | Phase 2 | Pending |
+| ENRICH-01 | Phase 4 | Pending |
+| ENRICH-02 | Phase 4 | Pending |
+| ENRICH-03 | Phase 4 | Pending |
+| ENRICH-04 | Phase 4 | Pending |
+| API-01 | Phase 3 | Pending |
+| API-02 | Phase 3 | Pending |
+| API-03 | Phase 3 | Pending |
+| API-04 | Phase 3 | Pending |
+| API-05 | Phase 3 | Pending |
+| MGMT-01 | Phase 6 | Pending |
+| MGMT-02 | Phase 6 | Pending |
+| MGMT-03 | Phase 6 | Pending |
+| MGMT-04 | Phase 6 | Pending |
+| MGMT-05 | Phase 6 | Pending |
+| MGMT-06 | Phase 6 | Pending |
 
 **Coverage:**
 - v1 requirements: 28 total
-- Mapped to phases: 0
-- Unmapped: 28
+- Mapped to phases: 28
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-14*
-*Last updated: 2026-04-14 after initial definition*
+*Last updated: 2026-04-14 after roadmap creation — all 28 requirements mapped*
