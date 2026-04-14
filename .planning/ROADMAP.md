@@ -30,7 +30,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. TypeScript imports of `designFeedback`, `insertDesignFeedbackSchema`, and `selectDesignFeedbackSchema` from shared/schema.ts compile without errors
   3. A test INSERT into design_feedback with a null designProjectId succeeds (FK is nullable via ON DELETE SET NULL)
   4. The embedding_vector column accepts a vector(3072) value without error
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+- [ ] 01-01-PLAN.md — Add designFeedback table + Zod schemas to shared/schema.ts, push to PostgreSQL
 
 ### Phase 2: Feedback Vector Store Module
 **Goal**: A dedicated server/feedback-vector-store.ts module exists with add, search, delete, and update operations that never touch the reference_images table
@@ -102,7 +105,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Schema & Database Foundation | 0/TBD | Not started | - |
+| 1. Schema & Database Foundation | 0/1 | Not started | - |
 | 2. Feedback Vector Store Module | 0/TBD | Not started | - |
 | 3. Feedback API Endpoints | 0/TBD | Not started | - |
 | 4. Prompt Enrichment Hook | 0/TBD | Not started | - |
