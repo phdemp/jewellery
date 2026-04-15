@@ -34,7 +34,8 @@ import {
   GOLD_PURITY,
 } from "./costing";
 import { addVector, searchSimilarVectors, clearVectorStore, migrateJsonToVector } from "./vector-store";
-import { insertDesignProjectSchema, insertReferenceImageSchema, driveImportRequestSchema, designProjectInputSchema, THEME_CODES } from "@shared/schema";
+import { insertDesignProjectSchema, insertReferenceImageSchema, driveImportRequestSchema, designProjectInputSchema, insertDesignFeedbackSchema, type DesignFeedback, THEME_CODES } from "@shared/schema";
+import { addFeedbackVector, updateFeedbackVector } from "./feedback-vector-store";
 import { extractFolderId, listImagesInFolder, downloadImage } from "./google-drive";
 import { searchSimilarStockItems } from "./stock-vector-store";
 import { read as xlsxRead, utils as xlsxUtils } from "xlsx";
@@ -2513,6 +2514,127 @@ export async function registerRoutes(
 
       const plan = await storage.createAssortmentPlan({ bdmName, selectedItemIds, notes: notes || null });
       res.json(plan);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // -- Feedback API -----------------------------------------------------------
+
+  app.post("/api/feedback", async (req, res) => {
+    try {
+      const parsed = insertDesignFeedbackSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid feedback data", details: parsed.error.errors });
+      }
+
+      const feedback = await storage.createFeedback(parsed.data);
+
+      // Generate and store embedding (non-blocking for the response)
+      try {
+        const embedding = await generateTextEmbedding(feedback.feedbackText);
+        await addFeedbackVector(feedback.id, embedding, feedback.category, feedback.theme);
+      } catch (embedError) {
+        console.error("[feedback] Embedding failed for feedback", feedback.id, embedError);
+        Sentry.captureException(embedError);
+      }
+
+      res.status(201).json(feedback);
+    } catch (error: unknown) {
+      Sentry.captureException(error);
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.get("/api/feedback", async (req, res) => {
+    try {
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+      const category = req.query.category as string | undefined;
+      const theme = req.query.theme as string | undefined;
+
+      const [data, total] = await Promise.all([
+        storage.getAllFeedback(page, limit, category, theme),
+        storage.countFeedback(category, theme),
+      ]);
+
+      res.json({ data, total, page, limit });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.get("/api/feedback/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const feedback = await storage.getFeedback(id);
+      if (!feedback) {
+        return res.status(404).json({ error: "Feedback not found" });
+      }
+      res.json(feedback);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.put("/api/feedback/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const existing = await storage.getFeedback(id);
+      if (!existing) {
+        return res.status(404).json({ error: "Feedback not found" });
+      }
+
+      const { feedbackText, tags, sentiment } = req.body;
+      const updateData: Record<string, unknown> = {};
+      if (feedbackText !== undefined) updateData.feedbackText = feedbackText;
+      if (tags !== undefined) updateData.tags = tags;
+      if (sentiment !== undefined) {
+        if (sentiment !== "positive" && sentiment !== "corrective") {
+          return res.status(400).json({ error: "sentiment must be 'positive' or 'corrective'" });
+        }
+        updateData.sentiment = sentiment;
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        return res.status(400).json({ error: "No fields to update" });
+      }
+
+      const updated = await storage.updateFeedback(id, updateData as Partial<DesignFeedback>);
+
+      // Re-embed only if feedbackText actually changed
+      if (feedbackText && feedbackText !== existing.feedbackText) {
+        try {
+          const embedding = await generateTextEmbedding(feedbackText);
+          await updateFeedbackVector(id, embedding);
+        } catch (embedError) {
+          console.error("[feedback] Re-embedding failed for feedback", id, embedError);
+          Sentry.captureException(embedError);
+        }
+      }
+
+      res.json(updated);
+    } catch (error: unknown) {
+      Sentry.captureException(error);
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.delete("/api/feedback/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const existing = await storage.getFeedback(id);
+      if (!existing) {
+        return res.status(404).json({ error: "Feedback not found" });
+      }
+
+      await storage.deleteFeedback(id);
+      res.json({ success: true });
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: msg });
