@@ -22,6 +22,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
+import { FeedbackForm } from "@/components/feedback-form";
 import {
   generateMarketingVisual,
   MARKETING_FORM_OPTIONS,
@@ -469,6 +470,12 @@ export default function MarketingPage() {
                   </pre>
                 </CollapsibleContent>
               </Collapsible>
+
+              <FeedbackForm
+                designProjectId={result.projectId}
+                category={form.watch("jewelleryCategory") || "Necklace"}
+                theme="Marketing"
+              />
 
               <Button
                 variant="outline"
