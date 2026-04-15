@@ -1000,3 +1000,109 @@ export async function saveAssortmentPlan(
   if (!res.ok) throw new Error("Failed to save plan");
   return res.json();
 }
+
+// -- Feedback API -----------------------------------------------------------
+
+export interface DesignFeedbackEntry {
+  id: string;
+  designProjectId: string | null;
+  feedbackText: string;
+  category: string;
+  theme: string;
+  tags: string[];
+  sentiment: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FeedbackListResponse {
+  data: DesignFeedbackEntry[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export async function createFeedback(data: {
+  feedbackText: string;
+  category: string;
+  theme: string;
+  tags?: string[];
+  sentiment?: "positive" | "corrective";
+  designProjectId?: string;
+}): Promise<DesignFeedbackEntry> {
+  const response = await fetch("/api/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error || "Failed to create feedback");
+  }
+  return response.json();
+}
+
+export async function getFeedbackList(params?: {
+  page?: number;
+  limit?: number;
+  category?: string;
+  theme?: string;
+}): Promise<FeedbackListResponse> {
+  const searchParams = new URLSearchParams();
+  if (params?.page) searchParams.set("page", String(params.page));
+  if (params?.limit) searchParams.set("limit", String(params.limit));
+  if (params?.category) searchParams.set("category", params.category);
+  if (params?.theme) searchParams.set("theme", params.theme);
+
+  const qs = searchParams.toString();
+  const url = qs ? `/api/feedback?${qs}` : "/api/feedback";
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error("Failed to fetch feedback list");
+  }
+  return response.json();
+}
+
+export async function getFeedbackById(id: string): Promise<DesignFeedbackEntry> {
+  const response = await fetch(`/api/feedback/${id}`);
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error("Feedback not found");
+    }
+    throw new Error("Failed to fetch feedback");
+  }
+  return response.json();
+}
+
+export async function updateFeedback(
+  id: string,
+  data: {
+    feedbackText?: string;
+    tags?: string[];
+    sentiment?: "positive" | "corrective";
+  }
+): Promise<DesignFeedbackEntry> {
+  const response = await fetch(`/api/feedback/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.error || "Failed to update feedback");
+  }
+  return response.json();
+}
+
+export async function deleteFeedback(id: string): Promise<{ success: boolean }> {
+  const response = await fetch(`/api/feedback/${id}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error("Feedback not found");
+    }
+    throw new Error("Failed to delete feedback");
+  }
+  return response.json();
+}
