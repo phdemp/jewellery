@@ -22,6 +22,7 @@ import { useToast } from "@/hooks/use-toast";
 import { MOTIF_GROUPS, STYLE_INSPIRATIONS } from "@/lib/jewellery-logic";
 import { OrnamentalDivider } from "@/components/ornamental-divider";
 import { CostReport } from "@/components/cost-report";
+import { FeedbackForm } from "@/components/feedback-form";
 import {
   generateCADComparison,
   SEGMENT_CATEGORY_PRICE_MAP,
@@ -929,6 +930,11 @@ export default function CadComparison() {
                     <CostReport report={result.costReport} />
                   </>
                 )}
+
+                <FeedbackForm
+                  category={category || "Necklace"}
+                  theme={productSegment || "Modern"}
+                />
               </>
             )}
 
