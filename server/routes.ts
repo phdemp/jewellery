@@ -1654,6 +1654,14 @@ export async function registerRoutes(
       if (cadStyleInspiration) cadExtras.style_inspiration = STYLE_INSPIRATION_DESCRIPTIONS[cadStyleInspiration as string] || cadStyleInspiration as string;
       const cadPrompt = buildCADPromptJSON(context, cadExtras);
 
+      // Retrieve matching feedback and inject into prompt
+      const cadFeedbackText = await retrieveFeedbackForPrompt(
+        resolvedCategory,
+        resolvedTheme,
+        `${resolvedCategory} ${resolvedTheme} ${(Array.isArray(motifs) ? motifs : []).join(" ")} ${customNotes || ""}`
+      );
+      const enrichedCadPrompt = cadPrompt + cadFeedbackText;
+
       // Generate both models in parallel — same prompt, different engines
       // OpenAI failure falls back to Gemini automatically (reuses already-generated Gemini image)
       // Compute aspect ratio based on category
@@ -1663,9 +1671,9 @@ export async function registerRoutes(
       const cadSize = cadIsPortrait ? "1024x1536" as const : "1024x1024" as const;
 
       const [geminiResult, openaiResult, grokResult] = await Promise.allSettled([
-        generateJewellerySketch(cadPrompt),
-        generateCADImageWithOpenAI(cadPrompt, cadSize),
-        generateImageWithGrok(cadPrompt, cadIsPortrait ? "3:4" : "1:1"),
+        generateJewellerySketch(enrichedCadPrompt),
+        generateCADImageWithOpenAI(enrichedCadPrompt, cadSize),
+        generateImageWithGrok(enrichedCadPrompt, cadIsPortrait ? "3:4" : "1:1"),
       ]);
 
       // At least one model must succeed
