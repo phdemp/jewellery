@@ -4,6 +4,7 @@ import { OrnamentalDivider } from "@/components/ornamental-divider";
 import { DesignForm } from "@/components/design-form";
 import { ResultDisplay } from "@/components/result-display";
 import { MultiModelResult } from "@/components/multi-model-result";
+import { FeedbackForm } from "@/components/feedback-form";
 import { CostReport } from "@/components/cost-report";
 import { DesignRequest } from "@/lib/jewellery-logic";
 import { useToast } from "@/hooks/use-toast";
@@ -14,6 +15,7 @@ export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [result, setResult] = useState<DesignGenerationResponse | null>(null);
   const [lastCategory, setLastCategory] = useState<string>("");
+  const [lastTheme, setLastTheme] = useState<string>("");
   const [mode, setMode] = useState<"sketch" | "cad">("sketch");
   const { toast } = useToast();
   const costReportRef = useRef<HTMLDivElement>(null);
@@ -21,6 +23,7 @@ export default function Home() {
   const handleGenerate = async (data: DesignRequest, styleOverride?: File) => {
     setIsGenerating(true);
     setLastCategory(data.category);
+    setLastTheme(data.productSegment || "Modern");
 
     try {
       const generated = await generateDesign({ ...data, mode }, styleOverride);
@@ -115,6 +118,13 @@ export default function Home() {
             />
           )}
           <ResultDisplay result={result} category={lastCategory} />
+          {result && (
+            <FeedbackForm
+              designProjectId={result.id}
+              category={lastCategory}
+              theme={lastTheme}
+            />
+          )}
         </div>
       </div>
 
