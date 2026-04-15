@@ -24,10 +24,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Feedback Storage & Retrieval
 
-- [ ] **STORE-01**: Dedicated feedback-vector-store module with add, search, delete, update operations
-- [ ] **STORE-02**: Search filters by category AND theme before ranking by cosine similarity
-- [ ] **STORE-03**: Similarity threshold gate (0.75 minimum) prevents irrelevant feedback from being retrieved
-- [ ] **STORE-04**: Error in feedback retrieval never blocks image generation (try/catch isolation)
+- [x] **STORE-01**: Dedicated feedback-vector-store module with add, search, delete, update operations
+- [x] **STORE-02**: Search filters by category AND theme before ranking by cosine similarity
+- [x] **STORE-03**: Similarity threshold gate (0.75 minimum) prevents irrelevant feedback from being retrieved
+- [x] **STORE-04**: Error in feedback retrieval never blocks image generation (try/catch isolation)
 
 ### Prompt Enrichment
 
@@ -91,10 +91,10 @@ Requirements for initial release. Each maps to roadmap phases.
 | SUBMIT-04 | Phase 5 | Pending |
 | SUBMIT-05 | Phase 5 | Pending |
 | SUBMIT-06 | Phase 5 | Pending |
-| STORE-01 | Phase 2 | Pending |
-| STORE-02 | Phase 2 | Pending |
-| STORE-03 | Phase 2 | Pending |
-| STORE-04 | Phase 2 | Pending |
+| STORE-01 | Phase 2 | Complete |
+| STORE-02 | Phase 2 | Complete |
+| STORE-03 | Phase 2 | Complete |
+| STORE-04 | Phase 2 | Complete |
 | ENRICH-01 | Phase 4 | Pending |
 | ENRICH-02 | Phase 4 | Pending |
 | ENRICH-03 | Phase 4 | Pending |
