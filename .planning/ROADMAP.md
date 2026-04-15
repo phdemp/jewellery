@@ -60,7 +60,10 @@ Plans:
   3. GET /api/feedback?category=Necklace&theme=BRP returns only entries matching both filters
   4. PUT /api/feedback/:id with updated feedbackText triggers re-embedding and the updated vector is stored
   5. DELETE /api/feedback/:id removes both the DB row and the vector, and a subsequent GET returns 404 for that id
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+- [ ] 03-01-PLAN.md — Add feedback CRUD storage methods, 5 Express route handlers, and typed client API wrappers
 
 ### Phase 4: Prompt Enrichment Hook
 **Goal**: Every generation on all four pages silently retrieves matching past feedback and injects it into the prompt — the designer sees better outputs without any extra action
@@ -110,7 +113,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 |-------|----------------|--------|-----------|
 | 1. Schema & Database Foundation | 1/1 | Complete | 2026-04-15 |
 | 2. Feedback Vector Store Module | 1/1 | Complete | 2026-04-15 |
-| 3. Feedback API Endpoints | 0/TBD | Not started | - |
+| 3. Feedback API Endpoints | 0/1 | Not started | - |
 | 4. Prompt Enrichment Hook | 0/TBD | Not started | - |
 | 5. Inline Feedback UI | 0/TBD | Not started | - |
 | 6. Feedback Management Page | 0/TBD | Not started | - |
