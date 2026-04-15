@@ -12,8 +12,8 @@ This milestone adds a designer feedback memory layer to an existing production R
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Schema & Database Foundation** - Create the design_feedback table, Zod schemas, and push to PostgreSQL
-- [ ] **Phase 2: Feedback Vector Store Module** - Dedicated feedback-vector-store.ts with add, search, delete and similarity threshold gate
+- [x] **Phase 1: Schema & Database Foundation** - Create the design_feedback table, Zod schemas, and push to PostgreSQL
+- [x] **Phase 2: Feedback Vector Store Module** - Dedicated feedback-vector-store.ts with add, search, delete and similarity threshold gate
 - [ ] **Phase 3: Feedback API Endpoints** - Five CRUD endpoints plus DatabaseStorage methods for all feedback operations
 - [ ] **Phase 4: Prompt Enrichment Hook** - Wire feedback retrieval into all four generation endpoints with sentiment-aware injection
 - [ ] **Phase 5: Inline Feedback UI** - FeedbackForm component mounted below ResultDisplay on all four generation pages
@@ -108,8 +108,8 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Schema & Database Foundation | 0/1 | Not started | - |
-| 2. Feedback Vector Store Module | 0/1 | Not started | - |
+| 1. Schema & Database Foundation | 1/1 | Complete | 2026-04-15 |
+| 2. Feedback Vector Store Module | 1/1 | Complete | 2026-04-15 |
 | 3. Feedback API Endpoints | 0/TBD | Not started | - |
 | 4. Prompt Enrichment Hook | 0/TBD | Not started | - |
 | 5. Inline Feedback UI | 0/TBD | Not started | - |
