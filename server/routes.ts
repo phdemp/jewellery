@@ -1776,11 +1776,19 @@ export async function registerRoutes(
         customNotes: customNotes || undefined,
       });
 
+      // Retrieve matching feedback and inject into prompt
+      const marketingFeedbackText = await retrieveFeedbackForPrompt(
+        jewelleryCategory,
+        "Marketing",
+        `${jewelleryCategory} marketing ${modelStyle} ${backgroundSetting} ${customNotes || ""}`
+      );
+      const enrichedMarketingPrompt = prompt + marketingFeedbackText;
+
       // Run all 3 AI models in parallel — allSettled so one failure doesn't block the others
       const [geminiResult, openaiResult, grokResult] = await Promise.allSettled([
-        generateMarketingVisualGemini(base64Image, prompt),
-        generateMarketingVisualOpenAI(base64Image, prompt),
-        generateMarketingVisualGrok(base64Image, prompt),
+        generateMarketingVisualGemini(base64Image, enrichedMarketingPrompt),
+        generateMarketingVisualOpenAI(base64Image, enrichedMarketingPrompt),
+        generateMarketingVisualGrok(base64Image, enrichedMarketingPrompt),
       ]);
 
       // Ensure designs/marketing directory exists
