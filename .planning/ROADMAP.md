@@ -45,7 +45,10 @@ Plans:
   3. Results with cosine similarity below 0.75 are never returned (threshold gate confirmed by inserting a clearly dissimilar vector and verifying empty result)
   4. An error thrown inside `searchSimilarFeedback` is caught and returns an empty array without crashing the caller (error isolation confirmed)
   5. `deleteFeedbackVector(id)` removes the row and a subsequent search for that vector returns nothing
-**Plans**: TBD
+**Plans**: 1 plan
+
+Plans:
+- [ ] 02-01-PLAN.md — Create feedback-vector-store.ts with add, search, delete, update functions
 
 ### Phase 3: Feedback API Endpoints
 **Goal**: Designer can POST feedback entries (which get embedded and stored) and the server exposes GET/PUT/DELETE operations for the management UI to consume
@@ -101,12 +104,12 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Schema & Database Foundation | 0/1 | Not started | - |
-| 2. Feedback Vector Store Module | 0/TBD | Not started | - |
+| 2. Feedback Vector Store Module | 0/1 | Not started | - |
 | 3. Feedback API Endpoints | 0/TBD | Not started | - |
 | 4. Prompt Enrichment Hook | 0/TBD | Not started | - |
 | 5. Inline Feedback UI | 0/TBD | Not started | - |
