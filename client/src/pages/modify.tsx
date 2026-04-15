@@ -14,6 +14,7 @@ import { modifyDesign, type ModifyDesignParams, type ModifyDesignResponse, SEGME
 import { STYLE_INSPIRATIONS } from "@/lib/jewellery-logic";
 import { Loader2, Upload, X, ImageIcon } from "lucide-react";
 import { CostReport } from "@/components/cost-report";
+import { FeedbackForm } from "@/components/feedback-form";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -909,6 +910,11 @@ export default function ModifyPage() {
                   grok={result.grok}
                 />
               )}
+              <FeedbackForm
+                designProjectId={result.id}
+                category={watchedCategory || "Necklace"}
+                theme={watchedSegment || "Modern"}
+              />
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center min-h-[400px] border-2 border-dashed border-border/60 rounded-xl bg-white/40 p-8 text-center">
