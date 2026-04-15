@@ -774,6 +774,14 @@ export async function registerRoutes(
       // Generate JSON-structured image prompt
       const imagePrompt = buildImagePromptJSON(context, extras);
 
+      // Retrieve matching feedback and inject into prompt
+      const feedbackText = await retrieveFeedbackForPrompt(
+        category,
+        productSegment || "Modern",
+        `${category} ${productSegment} ${motifs.join(" ")} ${stoneName.join(" ")} ${customNotes || ""}`
+      );
+      const enrichedImagePrompt = imagePrompt + feedbackText;
+
       // Generate images from all 3 models in parallel
       const isPortrait = PORTRAIT_CATEGORIES.some(c =>
         validatedData.category.toLowerCase().includes(c.toLowerCase())
@@ -798,7 +806,7 @@ export async function registerRoutes(
       const [geminiResult, openaiResult, grokResult] = await (async () => {
         if (mode === "cad") {
           // CAD mode: JSON spec prefixed with CAD_RULES (polki size is inside the JSON spec)
-          const cadPrompt = buildCADPromptJSON(context, extras);
+          const cadPrompt = buildCADPromptJSON(context, extras) + feedbackText;
           console.log(`[generate-design] CAD PROMPT (${cadPrompt.length} chars):\n${"═".repeat(80)}\n${cadPrompt}\n${"═".repeat(80)}`);
           return Promise.allSettled([
             timedGenerate("Gemini", () => generateJewellerySketch(cadPrompt)),
@@ -807,9 +815,9 @@ export async function registerRoutes(
           ]);
         } else {
           // Sketch mode: JSON spec prefixed with BRAND_RULES (polki size is inside the JSON spec)
-          const fullPrompt = `${BRAND_RULES}\n\n${imagePrompt}`;
+          const fullPrompt = `${BRAND_RULES}\n\n${enrichedImagePrompt}`;
           // Grok: use condensed preamble instead of full BRAND_RULES (8000-char limit)
-          const grokPrompt = `${GROK_SKETCH_PREAMBLE}\n\n${imagePrompt}`;
+          const grokPrompt = `${GROK_SKETCH_PREAMBLE}\n\n${enrichedImagePrompt}`;
           console.log(`[generate-design] FULL PROMPT (${fullPrompt.length} chars), GROK PROMPT (${grokPrompt.length} chars):\n${"═".repeat(80)}\n${fullPrompt}\n${"═".repeat(80)}`);
           return Promise.allSettled([
             timedGenerate("Gemini", () => generateJewellerySketch(fullPrompt)),
