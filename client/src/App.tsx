@@ -11,6 +11,7 @@ import ModifyPage from "@/pages/modify";
 import CadComparison from "@/pages/cad-comparison";
 import MarketingPage from "@/pages/marketing";
 import AssortmentPage from "@/pages/assortment";
+import FeedbackPage from "@/pages/feedback";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -23,6 +24,7 @@ function Router() {
       <Route path="/cad-comparison" component={CadComparison} />
       <Route path="/marketing" component={MarketingPage} />
       <Route path="/assortment" component={AssortmentPage} />
+      <Route path="/feedback" component={FeedbackPage} />
       <Route component={NotFound} />
     </Switch>
   );
