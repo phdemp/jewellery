@@ -11,15 +11,18 @@ import {
   type InsertStockItem,
   type AssortmentPlan,
   type InsertAssortmentPlan,
+  type DesignFeedback,
+  type InsertDesignFeedback,
   referenceImages,
   designProjects,
   designIterations,
   b2cSales,
   stockItems,
   assortmentPlans,
+  designFeedback,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, sql, inArray } from "drizzle-orm";
+import { eq, desc, sql, inArray, and, count } from "drizzle-orm";
 
 export interface IStorage {
   // Reference Image methods
@@ -64,6 +67,14 @@ export interface IStorage {
 
   // Assortment Plan methods
   createAssortmentPlan(data: InsertAssortmentPlan): Promise<AssortmentPlan>;
+
+  // Feedback methods
+  createFeedback(data: InsertDesignFeedback): Promise<DesignFeedback>;
+  getFeedback(id: string): Promise<DesignFeedback | undefined>;
+  getAllFeedback(page: number, limit: number, category?: string, theme?: string): Promise<DesignFeedback[]>;
+  countFeedback(category?: string, theme?: string): Promise<number>;
+  updateFeedback(id: string, data: Partial<DesignFeedback>): Promise<DesignFeedback | undefined>;
+  deleteFeedback(id: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -234,6 +245,67 @@ export class DatabaseStorage implements IStorage {
   async createAssortmentPlan(data: InsertAssortmentPlan): Promise<AssortmentPlan> {
     const result = await db.insert(assortmentPlans).values(data).returning();
     return result[0];
+  }
+
+  // -- Feedback methods --------------------------------------------------------
+
+  async createFeedback(data: InsertDesignFeedback): Promise<DesignFeedback> {
+    const result = await db.insert(designFeedback).values(data).returning();
+    return result[0];
+  }
+
+  async getFeedback(id: string): Promise<DesignFeedback | undefined> {
+    const result = await db.select().from(designFeedback).where(eq(designFeedback.id, id));
+    return result[0];
+  }
+
+  async getAllFeedback(
+    page: number,
+    limit: number,
+    category?: string,
+    theme?: string
+  ): Promise<DesignFeedback[]> {
+    const conditions = [];
+    if (category) conditions.push(eq(designFeedback.category, category));
+    if (theme) conditions.push(eq(designFeedback.theme, theme));
+
+    const query = db.select().from(designFeedback);
+    const filtered = conditions.length > 0
+      ? query.where(and(...conditions))
+      : query;
+
+    return await filtered
+      .orderBy(desc(designFeedback.createdAt))
+      .offset((page - 1) * limit)
+      .limit(limit);
+  }
+
+  async countFeedback(category?: string, theme?: string): Promise<number> {
+    const conditions = [];
+    if (category) conditions.push(eq(designFeedback.category, category));
+    if (theme) conditions.push(eq(designFeedback.theme, theme));
+
+    const query = db.select({ count: count() }).from(designFeedback);
+    const filtered = conditions.length > 0
+      ? query.where(and(...conditions))
+      : query;
+
+    const result = await filtered;
+    return result[0].count;
+  }
+
+  // NOTE: updatedAt must be set explicitly — Drizzle has no $onUpdate trigger (Phase 1 decision)
+  async updateFeedback(id: string, data: Partial<DesignFeedback>): Promise<DesignFeedback | undefined> {
+    const result = await db
+      .update(designFeedback)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(designFeedback.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async deleteFeedback(id: string): Promise<void> {
+    await db.delete(designFeedback).where(eq(designFeedback.id, id));
   }
 }
 
