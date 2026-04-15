@@ -33,7 +33,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 1 plan
 
 Plans:
-- [ ] 01-01-PLAN.md — Add designFeedback table + Zod schemas to shared/schema.ts, push to PostgreSQL
+- [x] 01-01-PLAN.md — Add designFeedback table + Zod schemas to shared/schema.ts, push to PostgreSQL
 
 ### Phase 2: Feedback Vector Store Module
 **Goal**: A dedicated server/feedback-vector-store.ts module exists with add, search, delete, and update operations that never touch the reference_images table
