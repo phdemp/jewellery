@@ -63,7 +63,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 03-01-PLAN.md — Add feedback CRUD storage methods, 5 Express route handlers, and typed client API wrappers
+- [x] 03-01-PLAN.md — Add feedback CRUD storage methods, 5 Express route handlers, and typed client API wrappers
 
 ### Phase 4: Prompt Enrichment Hook
 **Goal**: Every generation on all four pages silently retrieves matching past feedback and injects it into the prompt — the designer sees better outputs without any extra action

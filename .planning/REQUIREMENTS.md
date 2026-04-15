@@ -38,11 +38,11 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Feedback API
 
-- [ ] **API-01**: POST /api/feedback — create feedback entry with text, tags, sentiment, embed text
-- [ ] **API-02**: GET /api/feedback — list all feedback with pagination support
-- [ ] **API-03**: GET /api/feedback?category=X&theme=Y — filter feedback by category and/or theme
-- [ ] **API-04**: PUT /api/feedback/:id — update feedback text, tags, or sentiment (re-embed on text change)
-- [ ] **API-05**: DELETE /api/feedback/:id — delete feedback entry and its vector
+- [x] **API-01**: POST /api/feedback — create feedback entry with text, tags, sentiment, embed text
+- [x] **API-02**: GET /api/feedback — list all feedback with pagination support
+- [x] **API-03**: GET /api/feedback?category=X&theme=Y — filter feedback by category and/or theme
+- [x] **API-04**: PUT /api/feedback/:id — update feedback text, tags, or sentiment (re-embed on text change)
+- [x] **API-05**: DELETE /api/feedback/:id — delete feedback entry and its vector
 
 ### Feedback Management UI
 
@@ -99,11 +99,11 @@ Requirements for initial release. Each maps to roadmap phases.
 | ENRICH-02 | Phase 4 | Pending |
 | ENRICH-03 | Phase 4 | Pending |
 | ENRICH-04 | Phase 4 | Pending |
-| API-01 | Phase 3 | Pending |
-| API-02 | Phase 3 | Pending |
-| API-03 | Phase 3 | Pending |
-| API-04 | Phase 3 | Pending |
-| API-05 | Phase 3 | Pending |
+| API-01 | Phase 3 | Complete |
+| API-02 | Phase 3 | Complete |
+| API-03 | Phase 3 | Complete |
+| API-04 | Phase 3 | Complete |
+| API-05 | Phase 3 | Complete |
 | MGMT-01 | Phase 6 | Pending |
 | MGMT-02 | Phase 6 | Pending |
 | MGMT-03 | Phase 6 | Pending |
