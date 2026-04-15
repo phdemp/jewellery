@@ -208,3 +208,39 @@ export const insertAssortmentPlanSchema = createInsertSchema(assortmentPlans).om
 
 export type InsertAssortmentPlan = z.infer<typeof insertAssortmentPlanSchema>;
 export type AssortmentPlan = typeof assortmentPlans.$inferSelect;
+
+// ── Feedback & Prompt Learning ───────────────────────────────────────────────
+
+// Design Feedback table - stores designer feedback on generated images
+// for use in prompt enrichment (RAG-based learning loop)
+export const designFeedback = pgTable("design_feedback", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  // Nullable FK — ON DELETE SET NULL preserves feedback when a project is deleted
+  designProjectId: varchar("design_project_id")
+    .references(() => designProjects.id, { onDelete: "set null" }),
+  feedbackText: text("feedback_text").notNull(),
+  category: text("category").notNull(),       // e.g. "Necklace Set" — hard filter key
+  theme: text("theme").notNull(),             // e.g. "BRP" — hard filter key
+  tags: text("tags").array().notNull().default(sql`'{}'::text[]`),
+  // Valid values: "positive" | "corrective" — enforced by Zod, not DB enum
+  sentiment: text("sentiment").notNull().default("corrective"),
+  // Populated after Gemini text-embedding-004 call; null until embedded
+  embeddingVector: vector("embedding_vector"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  // NOTE: updatedAt must be set explicitly on every UPDATE — Drizzle has no $onUpdate trigger
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+// Insert schema — omit server-set fields; add sentiment enum and optional vector
+export const insertDesignFeedbackSchema = createInsertSchema(designFeedback).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  embeddingVector: z.array(z.number()).nullable().optional(),
+  sentiment: z.enum(["positive", "corrective"]).default("corrective"),
+});
+
+export type InsertDesignFeedback = z.infer<typeof insertDesignFeedbackSchema>;
+// Full row type — used by storage.ts return types and API response shapes
+export type DesignFeedback = typeof designFeedback.$inferSelect;
