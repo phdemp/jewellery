@@ -92,9 +92,9 @@ REQUIREMENTS.md (SCHEMA-02) specifies `ON DELETE SET NULL`. ARCHITECTURE.md also
 
 REQUIREMENTS.md names three exports: `designFeedback`, `insertDesignFeedbackSchema`, `selectDesignFeedbackSchema`.
 
-Note: `designFeedback` is the Drizzle table object itself (not a Zod schema). The naming matches how `referenceImages` (table object) and `insertReferenceImageSchema` (Zod) coexist. `selectDesignFeedbackSchema` is the select-side Zod schema — derive with `createSelectSchema` from `drizzle-zod` OR use `typeof designFeedback.$inferSelect`.
+Note: `designFeedback` is the Drizzle table object itself (not a Zod schema). The naming matches how `referenceImages` (table object) and `insertReferenceImageSchema` (Zod) coexist. `selectDesignFeedbackSchema` is the select-side Zod schema — derived with `createSelectSchema` from `drizzle-zod`.
 
-[ASSUMED: `selectDesignFeedbackSchema` is intended as a Zod schema, not just the inferred type. The existing codebase does not use `createSelectSchema` anywhere — it uses `$inferSelect` for TypeScript types only. The planner should use `z.object({...})` wrapping `designFeedback.$inferSelect` fields, OR simply export `typeof designFeedback.$inferSelect` as `SelectDesignFeedback` type and name it `selectDesignFeedbackSchema`. Confirm with user if strict Zod schema is needed vs TypeScript type.]
+[RESOLVED — Open Question #1: `createSelectSchema` IS exported by drizzle-zod 0.7.0 (confirmed by runtime check: `node -e "const dz = require('drizzle-zod'); console.log(Object.keys(dz))"` returns `['createInsertSchema', 'createSchemaFactory', 'createSelectSchema', 'createUpdateSchema']`). Use `createSelectSchema(designFeedback)` — it is a full Zod runtime schema, not just a TypeScript type. Add `createSelectSchema` to the existing drizzle-zod import line.]
 
 ---
 
@@ -106,6 +106,7 @@ Note: `designFeedback` is the Drizzle table object itself (not a Zod schema). Th
 | vector(3072) column | New `customType` definition | Reuse existing `vector` customType at top of `shared/schema.ts` | Already defined — redefining creates duplicate type |
 | Schema migration | Manual `CREATE TABLE` SQL | `npm run db:push` | Drizzle handles diff; pgvector extension already installed |
 | Insert schema validation | Manual Zod `.object({...})` | `createInsertSchema(designFeedback).omit({...}).extend({...})` | `drizzle-zod` auto-generates from table definition |
+| Select schema | Manual Zod `.object({...})` | `createSelectSchema(designFeedback)` | `drizzle-zod` 0.7.0 exports this — verified at runtime |
 
 **Key insight:** The entire `vector` customType infrastructure (including the `toDriver`/`fromDriver` serialization for the `[1,2,3,...]` format) is already solved and tested in production. Do not recreate it.
 
@@ -136,10 +137,9 @@ Note: `designFeedback` is the Drizzle table object itself (not a Zod schema). Th
 **Why it happens:** The `.env` file is not auto-loaded by `drizzle-kit push`.
 **How to avoid:** Run as `npm run db:push` (the npm script loads `.env` via `cross-env`). Do NOT run `npx drizzle-kit push` directly.
 
-### Pitfall 5: `createSelectSchema` Not Available
-**What goes wrong:** `drizzle-zod` 0.7.0 may export `createSelectSchema` — but the existing codebase never uses it. Attempting to import it may fail if not exported by this version.
-**Why it happens:** `drizzle-zod` API changed between versions; the project only uses `createInsertSchema`.
-**How to avoid:** For the select schema, use `z.object({})` manually or derive from `$inferSelect`. Verify with `npm run check` immediately after adding the import.
+### Pitfall 5: ~~`createSelectSchema` Not Available~~ (RESOLVED)
+**Status:** RESOLVED — `createSelectSchema` IS exported by drizzle-zod 0.7.0. The plan uses it directly.
+**What to do:** Add `createSelectSchema` to the existing drizzle-zod import line. Run `npm run check` to confirm.
 
 ---
 
@@ -167,9 +167,12 @@ export const designFeedback = pgTable("design_feedback", {
 });
 ```
 
-### Zod Schema Exports
+### Zod Schema Exports (UPDATED — Open Question #1 RESOLVED)
 ```typescript
 // Source: mirrors insertReferenceImageSchema pattern in shared/schema.ts
+// Import update required: add createSelectSchema to the drizzle-zod import
+
+import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 export const insertDesignFeedbackSchema = createInsertSchema(designFeedback).omit({
   id: true,
@@ -180,15 +183,13 @@ export const insertDesignFeedbackSchema = createInsertSchema(designFeedback).omi
   sentiment: z.enum(["positive", "corrective"]).default("corrective"),
 });
 
-// selectDesignFeedbackSchema — two valid approaches:
-// Option A (TypeScript type only, not Zod):
-export type DesignFeedback = typeof designFeedback.$inferSelect;
-
-// Option B (Zod schema for runtime validation):
-// export const selectDesignFeedbackSchema = createSelectSchema(designFeedback);
-// Use Option A unless a Zod runtime parse is needed on the read path.
+// selectDesignFeedbackSchema — full Zod runtime schema (createSelectSchema confirmed in drizzle-zod 0.7.0)
+export const selectDesignFeedbackSchema = createSelectSchema(designFeedback).extend({
+  embeddingVector: z.array(z.number()).nullable().optional(),
+});
 
 export type InsertDesignFeedback = z.infer<typeof insertDesignFeedbackSchema>;
+export type DesignFeedback = typeof designFeedback.$inferSelect;
 ```
 
 ### Test INSERT Verification (for success criteria 3)
@@ -261,18 +262,21 @@ All dependencies confirmed active because the existing app (with `referenceImage
 | # | Claim | Section | Risk if Wrong |
 |---|-------|---------|---------------|
 | A1 | `sentiment` column should use `text` type (not pgEnum) with Zod enum validation | Column Spec Reconciliation | If pgEnum is required, need an additional Drizzle `pgEnum()` export and `db:push` creates a new DB type — minor additional step |
-| A2 | `selectDesignFeedbackSchema` is satisfied by a TypeScript `$inferSelect` type (not a Zod runtime schema) | Zod Schema Export Pattern | If a Zod runtime parse is required downstream (e.g. Phase 3 API response validation), need to use `createSelectSchema` from drizzle-zod or hand-write the Zod object |
+| A2 | ~~`selectDesignFeedbackSchema` is satisfied by a TypeScript `$inferSelect` type~~ **SUPERSEDED** — `createSelectSchema` confirmed available; use it for a full Zod runtime schema | Zod Schema Export Pattern | N/A — resolved |
 | A3 | `defaultNow()` for `updatedAt` is acceptable (no DB-level trigger) | Column Spec | If Phase 3/4 requires `updated_at` to auto-update on every SQL UPDATE without application code, need a PostgreSQL trigger — adds complexity |
 | A4 | Environment has DATABASE_URL loaded and pgvector installed | Environment Availability | If pgvector extension is not installed, `db:push` will fail on `vector(3072)` column — run `CREATE EXTENSION IF NOT EXISTS vector;` first |
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does `selectDesignFeedbackSchema` need to be a Zod runtime schema or a TypeScript type?**
-   - What we know: REQUIREMENTS.md says "Zod insert/select schemas" — suggests Zod
-   - What's unclear: `createSelectSchema` from `drizzle-zod` exists but is not used anywhere in the codebase
-   - Recommendation: Export as TypeScript type (`typeof designFeedback.$inferSelect`) for Phase 1; upgrade to Zod if Phase 3 needs runtime response parsing
+   - **RESOLVED 2026-04-14:** `createSelectSchema` IS exported by drizzle-zod 0.7.0.
+     Runtime check: `node -e "const dz = require('drizzle-zod'); console.log(Object.keys(dz))"` →
+     `['createInsertSchema', 'createSchemaFactory', 'createSelectSchema', 'createUpdateSchema']`
+   - **Decision:** Export `selectDesignFeedbackSchema = createSelectSchema(designFeedback).extend({ embeddingVector: z.array(z.number()).nullable().optional() })` as a full Zod runtime schema.
+     Add `createSelectSchema` to the existing drizzle-zod import on line 3 of shared/schema.ts.
+   - **Plan updated:** 01-01-PLAN.md Task 1 action and acceptance criteria updated to include this export.
 
 2. **Should `sentiment` default to `"corrective"` or be required at insert time?**
    - What we know: REQUIREMENTS.md says "Designer can mark feedback as positive reinforcement or corrective" (SUBMIT-04, Phase 5)
@@ -289,6 +293,7 @@ All dependencies confirmed active because the existing app (with `referenceImage
 - `.planning/REQUIREMENTS.md` (direct inspection) — authoritative column spec for SCHEMA-01, SCHEMA-02, SCHEMA-03
 - `.planning/research/STACK.md` (direct inspection) — verified library versions, no-new-deps constraint
 - `.planning/research/ARCHITECTURE.md` (direct inspection) — FK ON DELETE SET NULL decision, schema SQL
+- drizzle-zod 0.7.0 runtime export check (2026-04-14) — confirmed `createSelectSchema` is exported
 
 ### Secondary (MEDIUM confidence)
 - `.planning/STATE.md` — pre-phase decisions (sync embedding, SET NULL rationale)
@@ -304,7 +309,7 @@ All dependencies confirmed active because the existing app (with `referenceImage
 - Standard stack: HIGH — all libraries verified via direct file inspection
 - Architecture (column spec): HIGH — REQUIREMENTS.md is authoritative; discrepancy with STACK.md resolved in favor of requirements
 - FK pattern: HIGH — verified against existing `designIterations.designProjectId` pattern
-- Zod schema exports: MEDIUM — `selectDesignFeedbackSchema` naming has ambiguity (A2)
+- Zod schema exports: HIGH — `createSelectSchema` confirmed available at runtime (was MEDIUM, now resolved)
 - Pitfalls: HIGH — derived from direct codebase inspection
 
 **Research date:** 2026-04-14
