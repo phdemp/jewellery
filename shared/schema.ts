@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { pgTable, text, varchar, timestamp, jsonb, integer, customType } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
+import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
 
 // Custom type for pgvector (3072 dimensions for gemini-embedding-001)
@@ -239,6 +239,11 @@ export const insertDesignFeedbackSchema = createInsertSchema(designFeedback).omi
 }).extend({
   embeddingVector: z.array(z.number()).nullable().optional(),
   sentiment: z.enum(["positive", "corrective"]).default("corrective"),
+});
+
+// Select schema — Zod runtime schema for validating rows returned from the DB
+export const selectDesignFeedbackSchema = createSelectSchema(designFeedback).extend({
+  embeddingVector: z.array(z.number()).nullable().optional(),
 });
 
 export type InsertDesignFeedback = z.infer<typeof insertDesignFeedbackSchema>;
