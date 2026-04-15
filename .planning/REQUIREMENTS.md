@@ -31,10 +31,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Prompt Enrichment
 
-- [ ] **ENRICH-01**: All 4 generation endpoints retrieve matching feedback and inject into prompts
-- [ ] **ENRICH-02**: Feedback injected via buildImagePromptJSON() extras as designer_feedback key
-- [ ] **ENRICH-03**: Corrective feedback framed as "AVOID: [text]", positive feedback framed as "EMPHASIZE: [text]"
-- [ ] **ENRICH-04**: Feedback injection is sanitized to prevent prompt injection attacks (strip control sequences, limit length)
+- [x] **ENRICH-01**: All 4 generation endpoints retrieve matching feedback and inject into prompts
+- [x] **ENRICH-02**: Feedback injected via buildImagePromptJSON() extras as designer_feedback key
+- [x] **ENRICH-03**: Corrective feedback framed as "AVOID: [text]", positive feedback framed as "EMPHASIZE: [text]"
+- [x] **ENRICH-04**: Feedback injection is sanitized to prevent prompt injection attacks (strip control sequences, limit length)
 
 ### Feedback API
 
@@ -95,10 +95,10 @@ Requirements for initial release. Each maps to roadmap phases.
 | STORE-02 | Phase 2 | Complete |
 | STORE-03 | Phase 2 | Complete |
 | STORE-04 | Phase 2 | Complete |
-| ENRICH-01 | Phase 4 | Pending |
-| ENRICH-02 | Phase 4 | Pending |
-| ENRICH-03 | Phase 4 | Pending |
-| ENRICH-04 | Phase 4 | Pending |
+| ENRICH-01 | Phase 4 | Complete |
+| ENRICH-02 | Phase 4 | Complete |
+| ENRICH-03 | Phase 4 | Complete |
+| ENRICH-04 | Phase 4 | Complete |
 | API-01 | Phase 3 | Complete |
 | API-02 | Phase 3 | Complete |
 | API-03 | Phase 3 | Complete |
