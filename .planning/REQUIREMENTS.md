@@ -46,12 +46,12 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Feedback Management UI
 
-- [ ] **MGMT-01**: Dedicated /feedback page accessible from main navigation
-- [ ] **MGMT-02**: Browse all past feedback entries in a card/table layout
-- [ ] **MGMT-03**: Filter feedback by category, theme, sentiment, and date range
-- [ ] **MGMT-04**: Edit feedback text, tags, and sentiment inline or in a modal
-- [ ] **MGMT-05**: Delete individual feedback entries with confirmation dialog
-- [ ] **MGMT-06**: Each feedback card shows the linked design project (thumbnail + category + theme)
+- [x] **MGMT-01**: Dedicated /feedback page accessible from main navigation
+- [x] **MGMT-02**: Browse all past feedback entries in a card/table layout
+- [x] **MGMT-03**: Filter feedback by category, theme, sentiment, and date range
+- [x] **MGMT-04**: Edit feedback text, tags, and sentiment inline or in a modal
+- [x] **MGMT-05**: Delete individual feedback entries with confirmation dialog
+- [x] **MGMT-06**: Each feedback card shows the linked design project (thumbnail + category + theme)
 
 ## v2 Requirements
 
@@ -104,12 +104,12 @@ Requirements for initial release. Each maps to roadmap phases.
 | API-03 | Phase 3 | Complete |
 | API-04 | Phase 3 | Complete |
 | API-05 | Phase 3 | Complete |
-| MGMT-01 | Phase 6 | Pending |
-| MGMT-02 | Phase 6 | Pending |
-| MGMT-03 | Phase 6 | Pending |
-| MGMT-04 | Phase 6 | Pending |
-| MGMT-05 | Phase 6 | Pending |
-| MGMT-06 | Phase 6 | Pending |
+| MGMT-01 | Phase 6 | Complete |
+| MGMT-02 | Phase 6 | Complete |
+| MGMT-03 | Phase 6 | Complete |
+| MGMT-04 | Phase 6 | Complete |
+| MGMT-05 | Phase 6 | Complete |
+| MGMT-06 | Phase 6 | Complete |
 
 **Coverage:**
 - v1 requirements: 28 total
