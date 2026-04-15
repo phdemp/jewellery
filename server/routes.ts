@@ -1443,6 +1443,14 @@ export async function registerRoutes(
       const editPrompt = lines.join("\n") + (modifyPolkiConstraint ? "\n\n" + modifyPolkiConstraint : "");
       const resolvedPath = path.resolve(inputPath);
 
+      // Retrieve matching feedback and inject into prompt
+      const modifyFeedbackText = await retrieveFeedbackForPrompt(
+        req.body.category || "Necklace",
+        req.body.productSegment || "Modern",
+        `${req.body.category || ""} ${req.body.productSegment || ""} ${motifs.join(" ")} ${req.body.customNotes || ""}`
+      );
+      const enrichedEditPrompt = editPrompt + modifyFeedbackText;
+
       // Start style detection immediately as a shared promise — all 3 models chain from it
       // so analyzeImageStyle runs in parallel with any sync work and is NOT awaited sequentially.
       // This preserves the same timing as before: style takes ~15s, models start as soon as it resolves.
@@ -1464,15 +1472,15 @@ export async function registerRoutes(
       try {
         settledResults = await Promise.allSettled([
           // Gemini: passes pre-computed style to skip its internal analyzeImageStyle call
-          stylePromise.then(style => modifyJewelleryImage(resolvedPath, editPrompt, style)),
+          stylePromise.then(style => modifyJewelleryImage(resolvedPath, enrichedEditPrompt, style)),
           // OpenAI: style-aware redesign prompt
           stylePromise.then(style => {
-            const openAIEditPrompt = `You are a professional jewellery redesign AI. TASK: Redesign this jewellery piece so the output looks CLEARLY DIFFERENT from the input — apply the specifications below visibly (new motifs, stones, layout as instructed).\n\n${buildStyleInstruction(style)}\n\n${editPrompt}`;
+            const openAIEditPrompt = `You are a professional jewellery redesign AI. TASK: Redesign this jewellery piece so the output looks CLEARLY DIFFERENT from the input — apply the specifications below visibly (new motifs, stones, layout as instructed).\n\n${buildStyleInstruction(style)}\n\n${enrichedEditPrompt}`;
             return modifyImageWithOpenAI(resolvedPath, openAIEditPrompt);
           }),
           // Grok: style-aware variation prompt
           stylePromise.then(style => {
-            const grokEditPrompt = `${buildStyleInstruction(style)}\n\nTASK: Apply the following design modifications to create a CLEARLY DIFFERENT variation of the uploaded jewellery. Do NOT copy the original — the output must reflect the new specifications.\n\n${editPrompt}`;
+            const grokEditPrompt = `${buildStyleInstruction(style)}\n\nTASK: Apply the following design modifications to create a CLEARLY DIFFERENT variation of the uploaded jewellery. Do NOT copy the original — the output must reflect the new specifications.\n\n${enrichedEditPrompt}`;
             return modifyImageWithGrok(resolvedPath, grokEditPrompt);
           }),
         ]) as [PromiseSettledResult<string>, PromiseSettledResult<string>, PromiseSettledResult<string>];
