@@ -35,10 +35,67 @@ import {
 } from "./costing";
 import { addVector, searchSimilarVectors, clearVectorStore, migrateJsonToVector } from "./vector-store";
 import { insertDesignProjectSchema, insertReferenceImageSchema, driveImportRequestSchema, designProjectInputSchema, insertDesignFeedbackSchema, type DesignFeedback, THEME_CODES } from "@shared/schema";
-import { addFeedbackVector, updateFeedbackVector } from "./feedback-vector-store";
+import { addFeedbackVector, updateFeedbackVector, searchSimilarFeedback } from "./feedback-vector-store";
 import { extractFolderId, listImagesInFolder, downloadImage } from "./google-drive";
 import { searchSimilarStockItems } from "./stock-vector-store";
 import { read as xlsxRead, utils as xlsxUtils } from "xlsx";
+
+// -- Feedback Enrichment Helpers ------------------------------------------------
+
+/**
+ * Sanitize feedback text before injection into AI prompts.
+ * Strips control characters and instruction-like patterns that could manipulate the model.
+ */
+function sanitizeFeedbackText(text: string): string {
+  // Strip control characters except newline and tab
+  let clean = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+  // Strip instruction-like patterns (case-insensitive)
+  clean = clean.replace(/\b(ignore|disregard|forget)\s+(all\s+)?(previous|above|prior)\s+(instructions?|rules?|context)\b/gi, "");
+  clean = clean.replace(/\b(system|assistant|user)\s*:/gi, "");
+  // Truncate to 500 chars max per entry to prevent context bloat
+  if (clean.length > 500) clean = clean.slice(0, 500) + "...";
+  return clean.trim();
+}
+
+/**
+ * Retrieve matching feedback from pgvector and format as prompt injection text.
+ * Returns empty string if no matching feedback or on any error.
+ * NEVER throws — generation must not fail because of feedback lookup.
+ */
+async function retrieveFeedbackForPrompt(
+  category: string,
+  theme: string,
+  queryText: string
+): Promise<string> {
+  try {
+    if (!category || !theme || !queryText) return "";
+
+    const queryEmbedding = await generateTextEmbedding(queryText);
+    const feedbackEntries = await searchSimilarFeedback(queryEmbedding, category, theme, 5);
+
+    if (feedbackEntries.length === 0) return "";
+
+    console.log(`[feedback-enrichment] Injecting ${feedbackEntries.length} feedback entries for ${category}/${theme}`);
+
+    const lines: string[] = ["\n\n--- DESIGNER FEEDBACK (apply these learned preferences) ---"];
+    for (const entry of feedbackEntries) {
+      const sanitized = sanitizeFeedbackText(entry.feedbackText);
+      if (!sanitized) continue;
+      if (entry.sentiment === "positive") {
+        lines.push(`EMPHASIZE: ${sanitized}`);
+      } else {
+        lines.push(`AVOID: ${sanitized}`);
+      }
+    }
+    lines.push("--- END FEEDBACK ---\n");
+
+    return lines.join("\n");
+  } catch (error) {
+    console.warn("[feedback-enrichment] Retrieval failed, skipping feedback injection:", error instanceof Error ? error.message : String(error));
+    Sentry.captureException(error);
+    return "";
+  }
+}
 
 // ── Style Inspiration Descriptions ──────────────────────────────────────────
 const STYLE_INSPIRATION_DESCRIPTIONS: Record<string, string> = {
