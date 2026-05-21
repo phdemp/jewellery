@@ -10,7 +10,7 @@ import Comparison from "@/pages/comparison";
 import ModifyPage from "@/pages/modify";
 import CadComparison from "@/pages/cad-comparison";
 import MarketingPage from "@/pages/marketing";
-import AssortmentPage from "@/pages/assortment";
+import IntelligencePage from "@/pages/intelligence";
 import FeedbackPage from "@/pages/feedback";
 import NotFound from "@/pages/not-found";
 
@@ -23,7 +23,7 @@ function Router() {
       <Route path="/modify" component={ModifyPage} />
       <Route path="/cad-comparison" component={CadComparison} />
       <Route path="/marketing" component={MarketingPage} />
-      <Route path="/assortment" component={AssortmentPage} />
+      <Route path="/assortment" component={IntelligencePage} />
       <Route path="/feedback" component={FeedbackPage} />
       <Route component={NotFound} />
     </Switch>

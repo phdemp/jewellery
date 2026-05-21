@@ -9,6 +9,7 @@ Sentry.init({
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
+import { startStockSyncCron } from "./stock-sync";
 import { createServer } from "http";
 import path from "path";
 
@@ -100,6 +101,7 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
+      startStockSyncCron();
     },
   );
 })();

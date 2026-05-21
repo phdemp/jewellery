@@ -1001,6 +1001,90 @@ export async function saveAssortmentPlan(
   return res.json();
 }
 
+// -- Live Stock Items API (synced from external API) -------------------------
+
+export interface LiveStockItem {
+  id: string;
+  jewelId: number;
+  jewelCode: string;
+  styleNo: string | null;
+  makeType: string | null;
+  subCategory: string | null;
+  stockType: string | null;
+  category: string | null;
+  baseMetal: string | null;
+  location: string | null;
+  manufacturerName: string | null;
+  tagPrice: number;
+  imageUrl: string | null;
+  currentStatus: string | null;
+  pureWt: string | null;
+  pureWtClarity: string | null;
+  totNetwt: string | null;
+  grossWt: string | null;
+  totDiaWt: string | null;
+  totPolkiWt: string | null;
+  totColorStoneWt: string | null;
+  qty: number;
+  itemPieces: number;
+  costPrice: number;
+  collectionName: string | null;
+  makeDate: string | null;
+  ageingDays: number;
+  memoClientName: string | null;
+  memoSalesPersonName: string | null;
+  memoDate: string | null;
+  syncedAt: string;
+}
+
+export interface StockItemsResponse {
+  items: LiveStockItem[];
+  total: number;
+  page: number;
+  totalPages: number;
+}
+
+export interface StockSummary {
+  totalCount: number;
+  onHandCount: number;
+  memoCount: number;
+  soldCount: number;
+  onHandCostValue: number;
+  onHandTagValue: number;
+  deadStockCount: number;
+  deadStockCostValue: number;
+  categoryBreakdown: Array<{ category: string; count: number; costValue: number; tagValue: number }>;
+  locationBreakdown: Array<{ location: string; count: number; costValue: number; tagValue: number }>;
+}
+
+export async function fetchStockItems(params: Record<string, string | number>): Promise<StockItemsResponse> {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== "") query.set(k, String(v));
+  });
+  const res = await fetch("/api/stock-items?" + query.toString());
+  if (!res.ok) throw new Error("Failed to fetch stock items");
+  return res.json();
+}
+
+export async function fetchStockSummary(): Promise<StockSummary> {
+  const res = await fetch("/api/stock-items/summary");
+  if (!res.ok) throw new Error("Failed to fetch stock summary");
+  return res.json();
+}
+
+export async function triggerStockSync(): Promise<{ inserted: number; updated: number; total: number }> {
+  const res = await fetch("/api/stock-items/sync", { method: "POST" });
+  if (!res.ok) throw new Error("Failed to trigger stock sync");
+  return res.json();
+}
+
+export async function fetchLastSync(): Promise<{ lastSync: string | null }> {
+  const res = await fetch("/api/stock-items/last-sync");
+  if (!res.ok) throw new Error("Failed to fetch last sync");
+  return res.json();
+}
+
 // -- Feedback API -----------------------------------------------------------
 
 export interface DesignFeedbackEntry {
