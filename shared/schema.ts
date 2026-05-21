@@ -209,6 +209,49 @@ export const insertAssortmentPlanSchema = createInsertSchema(assortmentPlans).om
 export type InsertAssortmentPlan = z.infer<typeof insertAssortmentPlanSchema>;
 export type AssortmentPlan = typeof assortmentPlans.$inferSelect;
 
+// ── Live Stock Items (synced from external API) ─────────────────────────────
+
+export const liveStockItems = pgTable("live_stock_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  jewelId: integer("jewel_id").notNull(),
+  jewelCode: varchar("jewel_code", { length: 20 }).notNull(),
+  styleNo: varchar("style_no", { length: 50 }),
+  makeType: varchar("make_type", { length: 50 }),
+  subCategory: varchar("sub_category", { length: 50 }),
+  stockType: varchar("stock_type", { length: 30 }),
+  category: varchar("category", { length: 80 }),
+  baseMetal: varchar("base_metal", { length: 20 }),
+  location: varchar("location", { length: 100 }),
+  manufacturerName: varchar("manufacturer_name", { length: 200 }),
+  tagPrice: integer("tag_price").default(0),
+  imageUrl: text("image_url"),
+  currentStatus: varchar("current_status", { length: 20 }),
+  pureWt: text("pure_wt"),
+  pureWtClarity: text("pure_wt_clarity"),
+  totNetwt: text("tot_netwt"),
+  grossWt: text("gross_wt"),
+  totDiaWt: text("tot_dia_wt"),
+  totPolkiWt: text("tot_polki_wt"),
+  totColorStoneWt: text("tot_color_stone_wt"),
+  qty: integer("qty").default(1),
+  itemPieces: integer("item_pieces").default(1),
+  costPrice: integer("cost_price").default(0),
+  collectionName: varchar("collection_name", { length: 100 }),
+  makeDate: varchar("make_date", { length: 20 }),
+  ageingDays: integer("ageing_days").default(0),
+  memoClientName: varchar("memo_client_name", { length: 200 }),
+  memoSalesPersonName: varchar("memo_sales_person_name", { length: 200 }),
+  memoDate: varchar("memo_date", { length: 20 }),
+  syncedAt: timestamp("synced_at").defaultNow(),
+});
+
+export const insertLiveStockItemSchema = createInsertSchema(liveStockItems).omit({
+  id: true,
+});
+
+export type InsertLiveStockItem = z.infer<typeof insertLiveStockItemSchema>;
+export type LiveStockItem = typeof liveStockItems.$inferSelect;
+
 // ── Feedback & Prompt Learning ───────────────────────────────────────────────
 
 // Design Feedback table - stores designer feedback on generated images

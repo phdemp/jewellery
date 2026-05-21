@@ -3,7 +3,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { db } from "./db";
-import { referenceImages, b2cSales as b2cSalesTable } from "@shared/schema";
+import { referenceImages, b2cSales as b2cSalesTable, liveStockItems } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
 import multer from "multer";
 import path from "path";
@@ -2724,6 +2724,218 @@ export async function registerRoutes(
 
       await storage.deleteFeedback(id);
       res.json({ success: true });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // ── Live Stock Items API (synced from external API) ─────────────────────
+
+  // GET /api/stock-items - list with filters and pagination
+  app.get("/api/stock-items", async (req, res) => {
+    try {
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 30));
+      const status = req.query.status as string | undefined;
+      const category = req.query.category as string | undefined;
+      const location = req.query.location as string | undefined;
+      const stockType = req.query.stockType as string | undefined;
+      const search = req.query.search as string | undefined;
+      const minPrice = req.query.minPrice ? parseFloat(req.query.minPrice as string) : undefined;
+      const maxPrice = req.query.maxPrice ? parseFloat(req.query.maxPrice as string) : undefined;
+      const ageingTag = req.query.ageingTag as string | undefined;
+      const sortBy = (req.query.sortBy as string) || "ageingDays";
+      const sortDir = (req.query.sortDir as string) === "asc" ? "ASC" : "DESC";
+
+      // Build dynamic WHERE using Drizzle sql fragments
+      const fragments: ReturnType<typeof sql>[] = [];
+
+      if (status) {
+        fragments.push(sql`${liveStockItems.currentStatus} = ${status}`);
+      }
+      if (category) {
+        fragments.push(sql`${liveStockItems.category} = ${category}`);
+      }
+      if (location) {
+        fragments.push(sql`${liveStockItems.location} = ${location}`);
+      }
+      if (stockType) {
+        fragments.push(sql`${liveStockItems.stockType} = ${stockType}`);
+      }
+      if (search) {
+        const pattern = `%${search}%`;
+        fragments.push(sql`(${liveStockItems.jewelCode} ILIKE ${pattern} OR ${liveStockItems.styleNo} ILIKE ${pattern})`);
+      }
+      if (minPrice !== undefined) {
+        fragments.push(sql`${liveStockItems.tagPrice} >= ${minPrice}`);
+      }
+      if (maxPrice !== undefined) {
+        fragments.push(sql`${liveStockItems.tagPrice} <= ${maxPrice}`);
+      }
+      if (ageingTag) {
+        switch (ageingTag) {
+          case "Fresh":
+            fragments.push(sql`${liveStockItems.ageingDays} >= 0 AND ${liveStockItems.ageingDays} <= 90`);
+            break;
+          case "Watch":
+            fragments.push(sql`${liveStockItems.ageingDays} >= 91 AND ${liveStockItems.ageingDays} <= 180`);
+            break;
+          case "Slow":
+            fragments.push(sql`${liveStockItems.ageingDays} >= 181 AND ${liveStockItems.ageingDays} <= 365`);
+            break;
+          case "Dead Stock":
+            fragments.push(sql`${liveStockItems.ageingDays} > 365`);
+            break;
+        }
+      }
+
+      // Combine conditions
+      const whereCondition = fragments.length > 0
+        ? sql.join(fragments, sql` AND `)
+        : sql`1=1`;
+
+      // Validate sortBy column — map to safe SQL identifiers
+      const allowedSortColumns: Record<string, string> = {
+        ageingDays: "ageing_days",
+        tagPrice: "tag_price",
+        costPrice: "cost_price",
+        jewelCode: "jewel_code",
+      };
+      const sortColumnName = allowedSortColumns[sortBy] || "ageing_days";
+      const orderExpr = sql.raw(`${sortColumnName} ${sortDir}`);
+
+      const offset = (page - 1) * limit;
+
+      const [countResult, dataResult] = await Promise.all([
+        db.select({ count: sql<number>`COUNT(*)::int` })
+          .from(liveStockItems)
+          .where(whereCondition),
+        db.select()
+          .from(liveStockItems)
+          .where(whereCondition)
+          .orderBy(orderExpr)
+          .limit(limit)
+          .offset(offset),
+      ]);
+
+      const total = countResult[0]?.count ?? 0;
+
+      res.json({
+        items: dataResult,
+        total,
+        page,
+        totalPages: Math.ceil(total / limit),
+      });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // POST /api/stock-items/sync - trigger manual sync
+  app.post("/api/stock-items/sync", async (_req, res) => {
+    try {
+      const { syncStockData } = await import("./stock-sync");
+      const result = await syncStockData();
+      res.json(result);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // GET /api/stock-items/summary - dashboard summary stats
+  app.get("/api/stock-items/summary", async (_req, res) => {
+    try {
+      // All counts and values in one pass using raw SQL for performance
+      const summaryResult = await db.execute(sql`
+        SELECT
+          COUNT(*)::int AS "totalCount",
+          COUNT(*) FILTER (WHERE current_status = 'On Hand')::int AS "onHandCount",
+          COUNT(*) FILTER (WHERE current_status = 'Memo')::int AS "memoCount",
+          COUNT(*) FILTER (WHERE current_status = 'Sold')::int AS "soldCount",
+          COALESCE(SUM(cost_price) FILTER (WHERE current_status = 'On Hand'), 0)::bigint AS "onHandCostValue",
+          COALESCE(SUM(tag_price) FILTER (WHERE current_status = 'On Hand'), 0)::bigint AS "onHandTagValue",
+          COUNT(*) FILTER (WHERE ageing_days > 365 AND current_status = 'On Hand')::int AS "deadStockCount",
+          COALESCE(SUM(cost_price) FILTER (WHERE ageing_days > 365 AND current_status = 'On Hand'), 0)::bigint AS "deadStockCostValue"
+        FROM live_stock_items
+      `);
+
+      const summary = summaryResult.rows[0] as {
+        totalCount: number;
+        onHandCount: number;
+        memoCount: number;
+        soldCount: number;
+        onHandCostValue: string;
+        onHandTagValue: string;
+        deadStockCount: number;
+        deadStockCostValue: string;
+      };
+
+      // Category breakdown (top 10 by count)
+      const catResult = await db.execute(sql`
+        SELECT
+          COALESCE(category, 'Unknown') AS category,
+          COUNT(*)::int AS count,
+          COALESCE(SUM(cost_price), 0)::bigint AS "costValue",
+          COALESCE(SUM(tag_price), 0)::bigint AS "tagValue"
+        FROM live_stock_items
+        WHERE current_status = 'On Hand'
+        GROUP BY category
+        ORDER BY count DESC
+        LIMIT 10
+      `);
+
+      // Location breakdown
+      const locResult = await db.execute(sql`
+        SELECT
+          COALESCE(location, 'Unknown') AS location,
+          COUNT(*)::int AS count,
+          COALESCE(SUM(cost_price), 0)::bigint AS "costValue",
+          COALESCE(SUM(tag_price), 0)::bigint AS "tagValue"
+        FROM live_stock_items
+        WHERE current_status = 'On Hand'
+        GROUP BY location
+        ORDER BY count DESC
+      `);
+
+      res.json({
+        totalCount: summary.totalCount,
+        onHandCount: summary.onHandCount,
+        memoCount: summary.memoCount,
+        soldCount: summary.soldCount,
+        onHandCostValue: Number(summary.onHandCostValue),
+        onHandTagValue: Number(summary.onHandTagValue),
+        deadStockCount: summary.deadStockCount,
+        deadStockCostValue: Number(summary.deadStockCostValue),
+        categoryBreakdown: (catResult.rows as Array<{ category: string; count: number; costValue: string; tagValue: string }>).map(r => ({
+          category: r.category,
+          count: r.count,
+          costValue: Number(r.costValue),
+          tagValue: Number(r.tagValue),
+        })),
+        locationBreakdown: (locResult.rows as Array<{ location: string; count: number; costValue: string; tagValue: string }>).map(r => ({
+          location: r.location,
+          count: r.count,
+          costValue: Number(r.costValue),
+          tagValue: Number(r.tagValue),
+        })),
+      });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // GET /api/stock-items/last-sync - when was last sync
+  app.get("/api/stock-items/last-sync", async (_req, res) => {
+    try {
+      const result = await db.execute(sql`
+        SELECT synced_at FROM live_stock_items ORDER BY synced_at DESC LIMIT 1
+      `);
+      const row = result.rows[0] as { synced_at: string } | undefined;
+      res.json({ lastSync: row?.synced_at || null });
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: msg });

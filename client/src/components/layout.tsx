@@ -95,7 +95,7 @@ export function Layout({ children }: { children: ReactNode }) {
                 className={`cursor-pointer transition-colors ${location === "/assortment" ? "text-primary" : "text-muted-foreground hover:text-primary"}`}
                 data-testid="nav-assortment"
               >
-                Assortment
+                Intelligence Platform
               </span>
             </Link>
             <Link href="/feedback">
