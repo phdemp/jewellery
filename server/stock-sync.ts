@@ -1,4 +1,5 @@
 import { db } from "./db";
+import { sql } from "drizzle-orm";
 import { liveStockItems } from "@shared/schema";
 
 const STOCK_API_URL = "http://183.83.176.221:94/api/Raniwala/GetStockMaster";
@@ -67,50 +68,97 @@ export async function syncStockData(): Promise<SyncResult> {
 
   console.log(`[stock-sync] Fetched ${json.data.length} items from API`);
 
-  // Clear and re-insert (full sync) - faster than upserting 16k rows
-  await db.delete(liveStockItems);
+  // Upsert by jewel_id — preserves embedding_vector on existing rows
+  // Step 1: Mark all as stale, then upsert incoming, then remove truly gone items
+  const incomingJewelIds = new Set(json.data.map(item => item.JewelId));
 
-  // Batch insert in chunks of 500
   const BATCH_SIZE = 500;
   let inserted = 0;
+  let updated = 0;
+
   for (let i = 0; i < json.data.length; i += BATCH_SIZE) {
-    const batch = json.data.slice(i, i + BATCH_SIZE).map(item => ({
-      jewelId: item.JewelId,
-      jewelCode: String(item.JewelCode || ""),
-      styleNo: item.StyleNo || null,
-      makeType: item.MakeType || null,
-      subCategory: item.SubCategory || null,
-      stockType: item.StockType || null,
-      category: item.Category || null,
-      baseMetal: item.BaseMetal || null,
-      location: item.Location || null,
-      manufacturerName: item.ManuFacturerName || null,
-      tagPrice: item.TagPrice || 0,
-      imageUrl: item.ImageUrl || null,
-      currentStatus: item.CurrentStatus || null,
-      pureWt: item.PureWt != null ? String(item.PureWt) : null,
-      pureWtClarity: item.PureWtClarity != null ? String(item.PureWtClarity) : null,
-      totNetwt: item.TotNetwt != null ? String(item.TotNetwt) : null,
-      grossWt: item.GrossWt != null ? String(item.GrossWt) : null,
-      totDiaWt: item.TotDiaWt != null ? String(item.TotDiaWt) : null,
-      totPolkiWt: item.TotPolkiWt != null ? String(item.TotPolkiWt) : null,
-      totColorStoneWt: item.TotColorStoneWt != null ? String(item.TotColorStoneWt) : null,
-      qty: item.Qty || 1,
-      itemPieces: item.ItemPieces || 1,
-      costPrice: item.CostPrice || 0,
-      collectionName: item.CollectionName || null,
-      makeDate: item.MakeDate || null,
-      ageingDays: item.AgeingDays || 0,
-      memoClientName: item.MemoClientName || null,
-      memoSalesPersonName: item.MemoSalesPersonName || null,
-      memoDate: item.MemoDate || null,
-    }));
-    await db.insert(liveStockItems).values(batch);
-    inserted += batch.length;
+    const batch = json.data.slice(i, i + BATCH_SIZE);
+
+    for (const item of batch) {
+      const jewelCode = String(item.JewelCode || "");
+      const values = {
+        jewelId: item.JewelId,
+        jewelCode,
+        styleNo: item.StyleNo || null,
+        makeType: item.MakeType || null,
+        subCategory: item.SubCategory || null,
+        stockType: item.StockType || null,
+        category: item.Category || null,
+        baseMetal: item.BaseMetal || null,
+        location: item.Location || null,
+        manufacturerName: item.ManuFacturerName || null,
+        tagPrice: item.TagPrice || 0,
+        imageUrl: item.ImageUrl || null,
+        currentStatus: item.CurrentStatus || null,
+        pureWt: item.PureWt != null ? String(item.PureWt) : null,
+        pureWtClarity: item.PureWtClarity != null ? String(item.PureWtClarity) : null,
+        totNetwt: item.TotNetwt != null ? String(item.TotNetwt) : null,
+        grossWt: item.GrossWt != null ? String(item.GrossWt) : null,
+        totDiaWt: item.TotDiaWt != null ? String(item.TotDiaWt) : null,
+        totPolkiWt: item.TotPolkiWt != null ? String(item.TotPolkiWt) : null,
+        totColorStoneWt: item.TotColorStoneWt != null ? String(item.TotColorStoneWt) : null,
+        qty: item.Qty || 1,
+        itemPieces: item.ItemPieces || 1,
+        costPrice: item.CostPrice || 0,
+        collectionName: item.CollectionName || null,
+        makeDate: item.MakeDate || null,
+        ageingDays: item.AgeingDays || 0,
+        memoClientName: item.MemoClientName || null,
+        memoSalesPersonName: item.MemoSalesPersonName || null,
+        memoDate: item.MemoDate || null,
+      };
+
+      // Check if exists by jewel_id
+      const existing = await db.execute(
+        sql`SELECT id FROM live_stock_items WHERE jewel_id = ${item.JewelId} LIMIT 1`
+      );
+
+      if (existing.rows.length > 0) {
+        // Update metadata but keep embedding_vector and embedding_status
+        await db.execute(sql`
+          UPDATE live_stock_items SET
+            jewel_code = ${jewelCode}, style_no = ${values.styleNo},
+            make_type = ${values.makeType}, sub_category = ${values.subCategory},
+            stock_type = ${values.stockType}, category = ${values.category},
+            base_metal = ${values.baseMetal}, location = ${values.location},
+            manufacturer_name = ${values.manufacturerName}, tag_price = ${values.tagPrice},
+            image_url = ${values.imageUrl}, current_status = ${values.currentStatus},
+            pure_wt = ${values.pureWt}, pure_wt_clarity = ${values.pureWtClarity},
+            tot_netwt = ${values.totNetwt}, gross_wt = ${values.grossWt},
+            tot_dia_wt = ${values.totDiaWt}, tot_polki_wt = ${values.totPolkiWt},
+            tot_color_stone_wt = ${values.totColorStoneWt}, qty = ${values.qty},
+            item_pieces = ${values.itemPieces}, cost_price = ${values.costPrice},
+            collection_name = ${values.collectionName}, make_date = ${values.makeDate},
+            ageing_days = ${values.ageingDays}, memo_client_name = ${values.memoClientName},
+            memo_sales_person_name = ${values.memoSalesPersonName}, memo_date = ${values.memoDate},
+            synced_at = NOW()
+          WHERE jewel_id = ${item.JewelId}
+        `);
+        updated++;
+      } else {
+        await db.insert(liveStockItems).values(values);
+        inserted++;
+      }
+    }
   }
 
-  console.log(`[stock-sync] Sync complete: ${inserted} items inserted`);
-  return { inserted, updated: 0, total: json.data.length };
+  // Remove items no longer in the API (sold/transferred)
+  const allExisting = await db.execute(sql`SELECT jewel_id FROM live_stock_items`);
+  let removed = 0;
+  for (const row of allExisting.rows as { jewel_id: number }[]) {
+    if (!incomingJewelIds.has(row.jewel_id)) {
+      await db.execute(sql`DELETE FROM live_stock_items WHERE jewel_id = ${row.jewel_id}`);
+      removed++;
+    }
+  }
+
+  console.log(`[stock-sync] Sync complete: ${inserted} new, ${updated} updated, ${removed} removed`);
+  return { inserted, updated, total: json.data.length };
 }
 
 // Cron: run daily

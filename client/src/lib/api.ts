@@ -80,14 +80,25 @@ export async function uploadReferenceImage(
 export const THEME_CODES = [
   { code: "WRD", name: "Wearable Daily" },
   { code: "WRO", name: "Wearable Occasional" },
+  { code: "WRC", name: "Wearable Classic" },
+  { code: "WRP", name: "Wearable Premium" },
   { code: "CLO", name: "Collectable Occasional" },
+  { code: "CLC", name: "Collectable Classic" },
+  { code: "CLD", name: "Collectable Daily" },
+  { code: "CLP", name: "Collectable Premium" },
   { code: "SOD", name: "Solitaire Daily" },
   { code: "SOO", name: "Solitaire Occasional" },
   { code: "SOP", name: "Solitaire Premium" },
   { code: "BRC", name: "Bridal Classic" },
   { code: "BRP", name: "Bridal Premium" },
   { code: "BRU", name: "Bridal Unique" },
+  { code: "BRD", name: "Bridal Daily" },
+  { code: "BRO", name: "Bridal Occasional" },
 ] as const;
+
+export const THEME_CODE_LABELS: Record<string, string> = Object.fromEntries(
+  THEME_CODES.map((t) => [t.code, t.name])
+);
 
 export const REFERENCE_SEGMENTS = [
   "Bridal",
@@ -1188,5 +1199,224 @@ export async function deleteFeedback(id: string): Promise<{ success: boolean }> 
     }
     throw new Error("Failed to delete feedback");
   }
+  return response.json();
+}
+
+// ── Self-Improving Image Generation APIs ──────────────────────────────────
+
+export interface DesignEvaluationEntry {
+  id: string;
+  designProjectId: string | null;
+  modelProvider: string;
+  imageUrl: string;
+  brandCompliance: number;
+  viewAngle: number;
+  composition: number;
+  motifAccuracy: number;
+  stoneRendering: number;
+  goldBalance: number;
+  overallQuality: number;
+  reasoning: string | null;
+  promptVersionId: string | null;
+  evaluatedAt: string;
+}
+
+export interface EvaluationSummaryByModel {
+  model_provider: string;
+  total: number;
+  avg_brand_compliance: number;
+  avg_view_angle: number;
+  avg_composition: number;
+  avg_motif_accuracy: number;
+  avg_stone_rendering: number;
+  avg_gold_balance: number;
+  avg_overall_quality: number;
+}
+
+export interface EvaluationTimeSeries {
+  date: string;
+  model_provider: string;
+  avg_quality: number;
+  count: number;
+}
+
+export interface PromptVersionEntry {
+  id: string;
+  versionNumber: number;
+  scope: string;
+  templateText: string;
+  avgOverallScore: number | null;
+  generationCount: number | null;
+  isActive: number | null;
+  parentVersionId: string | null;
+  createdAt: string;
+}
+
+export interface OptimizationRunEntry {
+  id: string;
+  scope: string;
+  before_version_id: string | null;
+  after_version_id: string | null;
+  before_avg_score: number | null;
+  after_avg_score: number | null;
+  weak_dimensions: string[] | null;
+  candidates_tested: number | null;
+  status: string;
+  error_message: string | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export async function fetchEvaluations(params?: {
+  page?: number;
+  limit?: number;
+  model?: string;
+  promptVersionId?: string;
+}): Promise<{ items: DesignEvaluationEntry[]; total: number; page: number; limit: number }> {
+  const searchParams = new URLSearchParams();
+  if (params?.page) searchParams.set("page", String(params.page));
+  if (params?.limit) searchParams.set("limit", String(params.limit));
+  if (params?.model) searchParams.set("model", params.model);
+  if (params?.promptVersionId) searchParams.set("promptVersionId", params.promptVersionId);
+
+  const response = await fetch(`/api/evaluations?${searchParams}`);
+  if (!response.ok) throw new Error("Failed to fetch evaluations");
+  return response.json();
+}
+
+export async function fetchEvaluationSummary(): Promise<{
+  byModel: EvaluationSummaryByModel[];
+  timeSeries: EvaluationTimeSeries[];
+}> {
+  const response = await fetch("/api/evaluations/summary");
+  if (!response.ok) throw new Error("Failed to fetch evaluation summary");
+  return response.json();
+}
+
+export async function fetchProjectEvaluations(projectId: string): Promise<{
+  items: DesignEvaluationEntry[];
+}> {
+  const response = await fetch(`/api/evaluations/project/${projectId}`);
+  if (!response.ok) throw new Error("Failed to fetch project evaluations");
+  return response.json();
+}
+
+export async function triggerDesignEvaluation(projectId: string): Promise<DesignEvaluationEntry> {
+  const response = await fetch(`/api/evaluate-design/${projectId}`, { method: "POST" });
+  if (!response.ok) throw new Error("Failed to evaluate design");
+  return response.json();
+}
+
+export async function fetchPromptVersions(scope?: string): Promise<{ items: PromptVersionEntry[] }> {
+  const params = scope ? `?scope=${scope}` : "";
+  const response = await fetch(`/api/prompt-versions${params}`);
+  if (!response.ok) throw new Error("Failed to fetch prompt versions");
+  return response.json();
+}
+
+export async function activatePromptVersion(versionId: string): Promise<{ success: boolean }> {
+  const response = await fetch(`/api/prompt-versions/${versionId}/activate`, { method: "POST" });
+  if (!response.ok) throw new Error("Failed to activate prompt version");
+  return response.json();
+}
+
+export async function fetchOptimizationRuns(): Promise<{ items: OptimizationRunEntry[] }> {
+  const response = await fetch("/api/optimization-runs");
+  if (!response.ok) throw new Error("Failed to fetch optimization runs");
+  return response.json();
+}
+
+// -- AI Assortment Scoring API -----------------------------------------------
+
+export interface AiScoreRequest {
+  bdmName: string;
+  stateName?: string;
+  clientName?: string;
+  kitSize?: number;
+  weightMin?: number;
+  weightMax?: number;
+}
+
+export interface AiScoreBreakdown {
+  visual: number;
+  category: number;
+  price: number;
+  ageing: number;
+  uniqueness: number;
+}
+
+export interface AiScoredItem {
+  jewelCode: string;
+  styleNo: string;
+  category: string;
+  tagPrice: number;
+  costPrice: number;
+  ageingDays: number;
+  ageTag: string;
+  grossWt: string;
+  pureWt: string;
+  totDiaWt: string;
+  baseMetal: string;
+  stockType: string;
+  location: string;
+  imageUrl: string;
+  score: number;
+  tier: "MUST INCLUDE" | "RECOMMENDED" | "OPTIONAL" | null;
+  reasons: Array<{ tag: string; text: string }>;
+  scoreBreakdown: AiScoreBreakdown;
+}
+
+export interface AiScoreProfile {
+  bdmName: string;
+  summary: string;
+  preferredCategories: string[];
+  priceRange: { min: number; max: number; sweet_spot: number };
+  totalSalesAnalyzed: number;
+  embeddedSalesUsed: number;
+  visualPatterns: string[];
+  preferredMotifs: string[];
+  preferredFinishes: string[];
+  stockTypePreference: Record<string, number>;
+}
+
+export interface AiScoreResponse {
+  items: AiScoredItem[];
+  profile: AiScoreProfile;
+  timing: {
+    profileMs: number;
+    scoringMs: number;
+    totalMs: number;
+    method: "vector" | "formula";
+  };
+}
+
+export async function generateAiAssortmentScore(request: AiScoreRequest): Promise<AiScoreResponse> {
+  const response = await fetch("/api/assortment/ai-score", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: "AI scoring failed" }));
+    throw new Error(err.error || "AI scoring failed");
+  }
+  return response.json();
+}
+
+export async function fetchB2bBdmList(): Promise<{ bdms: string[] }> {
+  const response = await fetch("/api/b2b-sales/bdm-list");
+  if (!response.ok) throw new Error("Failed to fetch BDM list");
+  return response.json();
+}
+
+export async function fetchB2bStatesForBdm(bdmName: string): Promise<{ states: string[] }> {
+  const response = await fetch(`/api/b2b-sales/bdm/${encodeURIComponent(bdmName)}/states`);
+  if (!response.ok) throw new Error("Failed to fetch states");
+  return response.json();
+}
+
+export async function fetchB2bClientsForBdm(bdmName: string): Promise<{ clients: Array<{ name: string; spend: number; count: number }> }> {
+  const response = await fetch(`/api/b2b-sales/bdm/${encodeURIComponent(bdmName)}/clients`);
+  if (!response.ok) throw new Error("Failed to fetch clients");
   return response.json();
 }

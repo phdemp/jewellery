@@ -177,6 +177,27 @@ export const stockItems = pgTable("stock_items", {
   sketchDesigner: text("sketch_designer"),
   labName: text("lab_name"),
   certificateNo: text("certificate_no"),
+  // VA (Visual Analysis) fields from Excel
+  vaCategory: text("va_category"),
+  brandName: text("brand_name"),
+  designShape: text("design_shape"),
+  enamel: text("enamel"),
+  finish: text("finish"),
+  materialRatio: text("material_ratio"),
+  motif: text("motif"),
+  motifCategory: text("motif_category"),
+  piroiColour: text("piroi_colour"),
+  piroiPlacement: text("piroi_placement"),
+  polkiSize: text("polki_size"),
+  priceBand: text("price_band"),
+  productSegment: text("product_segment"),
+  setCategory: text("set_category"),
+  stoneColour: text("stone_colour"),
+  talaf: text("talaf"),
+  theme: text("theme"),
+  themeCode: text("theme_code"),
+  label: text("label"),
+  // Embedding
   embeddingVector: vector("embedding_vector"),
   embeddingStatus: text("embedding_status").default("pending"),
   importedAt: timestamp("imported_at").defaultNow().notNull(),
@@ -243,10 +264,14 @@ export const liveStockItems = pgTable("live_stock_items", {
   memoSalesPersonName: varchar("memo_sales_person_name", { length: 200 }),
   memoDate: varchar("memo_date", { length: 20 }),
   syncedAt: timestamp("synced_at").defaultNow(),
+  embeddingVector: vector("embedding_vector", { dimensions: 3072 }),
+  embeddingStatus: text("embedding_status").default("pending"),
 });
 
 export const insertLiveStockItemSchema = createInsertSchema(liveStockItems).omit({
   id: true,
+  embeddingVector: true,
+  embeddingStatus: true,
 });
 
 export type InsertLiveStockItem = z.infer<typeof insertLiveStockItemSchema>;
@@ -292,3 +317,116 @@ export const selectDesignFeedbackSchema = createSelectSchema(designFeedback).ext
 export type InsertDesignFeedback = z.infer<typeof insertDesignFeedbackSchema>;
 // Full row type — used by storage.ts return types and API response shapes
 export type DesignFeedback = typeof designFeedback.$inferSelect;
+
+// ── Self-Improving Image Generation ──────────────────────────────────────────
+
+// Design Evaluations — AI-scored quality assessments of generated images
+export const designEvaluations = pgTable("design_evaluations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  designProjectId: varchar("design_project_id")
+    .references(() => designProjects.id, { onDelete: "set null" }),
+  modelProvider: text("model_provider").notNull(), // "gemini" | "openai" | "grok"
+  imageUrl: text("image_url").notNull(),
+  // 7 scoring dimensions (1-5 each)
+  brandCompliance: integer("brand_compliance").notNull(),
+  viewAngle: integer("view_angle").notNull(),
+  composition: integer("composition").notNull(),
+  motifAccuracy: integer("motif_accuracy").notNull(),
+  stoneRendering: integer("stone_rendering").notNull(),
+  goldBalance: integer("gold_balance").notNull(),
+  overallQuality: integer("overall_quality").notNull(),
+  reasoning: text("reasoning"), // Gemini's explanation for the scores
+  promptVersionId: varchar("prompt_version_id"),
+  evaluatedAt: timestamp("evaluated_at").defaultNow().notNull(),
+});
+
+export const insertDesignEvaluationSchema = createInsertSchema(designEvaluations).omit({
+  id: true,
+  evaluatedAt: true,
+});
+
+export type InsertDesignEvaluation = z.infer<typeof insertDesignEvaluationSchema>;
+export type DesignEvaluation = typeof designEvaluations.$inferSelect;
+
+// Prompt Versions — versioned prompt templates for self-improvement
+export const promptVersions = pgTable("prompt_versions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  versionNumber: integer("version_number").notNull(),
+  scope: text("scope").notNull(), // "brand_rules" | "sketch_json" | "cad_rules" | "grok_preamble"
+  templateText: text("template_text").notNull(),
+  avgOverallScore: integer("avg_overall_score"), // stored as score x 100 for int precision
+  generationCount: integer("generation_count").default(0),
+  isActive: integer("is_active").default(0), // 1 = active, 0 = inactive (no boolean in drizzle pg)
+  parentVersionId: varchar("parent_version_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertPromptVersionSchema = createInsertSchema(promptVersions).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertPromptVersion = z.infer<typeof insertPromptVersionSchema>;
+export type PromptVersion = typeof promptVersions.$inferSelect;
+
+// Optimization Runs — tracks before/after scores per optimization run
+export const optimizationRuns = pgTable("optimization_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  scope: text("scope").notNull(),
+  beforeVersionId: varchar("before_version_id"),
+  afterVersionId: varchar("after_version_id"),
+  beforeAvgScore: integer("before_avg_score"), // x100
+  afterAvgScore: integer("after_avg_score"), // x100
+  weakDimensions: text("weak_dimensions").array(),
+  candidatesTested: integer("candidates_tested").default(0),
+  status: text("status").notNull().default("running"), // "running" | "completed" | "failed"
+  errorMessage: text("error_message"),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+});
+
+// ── B2B Sales History (imported from b2b_sales_VA_and_FinalPrice.xlsx) ──────
+
+export const b2bSalesHistory = pgTable("b2b_sales_history", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  salesPersonName: text("sales_person_name").notNull(),
+  clientName: text("client_name"),
+  stateName: text("state_name"),
+  clientCity: text("client_city"),
+  imageLink: text("image_link"),
+  jewelCode: text("jewel_code"),
+  styleCode: text("style_code"),
+  category: text("category"),
+  categoryGroup: text("category_group"),
+  tagPrice: integer("tag_price"),
+  finalPrice: integer("final_price"),
+  transPrice: integer("trans_price"),
+  grossWt: text("gross_wt"),
+  pureWt: text("pure_wt"),
+  totDiaWt: text("tot_dia_wt"),
+  baseMetalQuality: text("base_metal_quality"),
+  stockType: text("stock_type"),
+  subCategory: text("sub_category"),
+  makeType: text("make_type"),
+  // VA-style fields for scoring context
+  motif: text("motif"),
+  motifCategory: text("motif_category"),
+  productSegment: text("product_segment"),
+  designShape: text("design_shape"),
+  finish: text("finish"),
+  stoneColour: text("stone_colour"),
+  materialRatio: text("material_ratio"),
+  importedAt: timestamp("imported_at").defaultNow().notNull(),
+  embeddingVector: vector("embedding_vector", { dimensions: 3072 }),
+  embeddingStatus: text("embedding_status").default("pending"),
+});
+
+export const insertB2bSalesHistorySchema = createInsertSchema(b2bSalesHistory).omit({
+  id: true,
+  importedAt: true,
+  embeddingVector: true,
+  embeddingStatus: true,
+});
+
+export type InsertB2bSalesHistory = z.infer<typeof insertB2bSalesHistorySchema>;
+export type B2bSalesHistory = typeof b2bSalesHistory.$inferSelect;

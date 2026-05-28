@@ -42,6 +42,8 @@ import { extractFolderId, listImagesInFolder, downloadImage } from "./google-dri
 import { startBatchImport, startBatchReembed, getBatchImportStatus } from "./batch-import";
 import { searchSimilarStockItems } from "./stock-vector-store";
 import { read as xlsxRead, utils as xlsxUtils } from "xlsx";
+// Lazy-imported inside route handler to avoid blocking route registration
+// import { scoreAssortment, type InventoryCandidate } from "./assortment-scorer";
 
 // -- Feedback Enrichment Helpers ------------------------------------------------
 
@@ -3262,6 +3264,142 @@ export async function registerRoutes(
       const row = result.rows[0] as { synced_at: string } | undefined;
       res.json({ lastSync: row?.synced_at || null });
     } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // ── B2B Sales History endpoints ────────────────────────────────────────
+
+  app.get("/api/b2b-sales/bdm-list", async (_req, res) => {
+    try {
+      const bdms = await storage.getDistinctB2bBdmNames();
+      res.json({ bdms });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.get("/api/b2b-sales/bdm/:name/states", async (req, res) => {
+    try {
+      const states = await storage.getB2bStatesForBdm(req.params.name);
+      res.json({ states });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.get("/api/b2b-sales/bdm/:name/clients", async (req, res) => {
+    try {
+      const clients = await storage.getB2bClientsForBdm(req.params.name);
+      res.json({ clients });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // ── AI Assortment Scoring (vector-based) ─────────────────────────────────
+
+  app.post("/api/assortment/ai-score", async (req, res) => {
+    try {
+      const { bdmName, stateName, clientName, kitSize = 100, weightMin, weightMax } = req.body;
+      if (!bdmName) {
+        return res.status(400).json({ error: "bdmName is required" });
+      }
+
+      console.log(`[ai-score] Starting vector scoring for BDM: ${bdmName}, state: ${stateName || "all"}, client: ${clientName || "all"}`);
+
+      // Fetch BDM's past sales (metadata for profile generation)
+      const sales = await storage.getB2bSalesByBdm(bdmName, stateName || undefined, clientName || undefined);
+      console.log(`[ai-score] Found ${sales.length} past sales`);
+
+      // Fallback candidates for formula scoring (when no vectors available)
+      let fallbackCandidates: Array<{ jewelCode: string; styleNo: string; category: string; tagPrice: number; costPrice: number; ageingDays: number; grossWt: string; pureWt: string; totDiaWt: string; stockType: string; location: string; imageUrl: string; baseMetal: string; currentStatus: string }> = [];
+
+      // Check if we have embedded stock (for vector path)
+      const embeddedCount = await db.execute(sql`
+        SELECT COUNT(*) as cnt FROM live_stock_items
+        WHERE embedding_vector IS NOT NULL AND embedding_status = 'done'
+      `);
+      const hasEmbeddings = Number((embeddedCount.rows[0] as { cnt: string }).cnt) > 0;
+
+      if (!hasEmbeddings) {
+        // No embeddings yet — fetch raw candidates for formula fallback
+        console.log("[ai-score] No stock embeddings found, using formula fallback");
+        let candidateQuery = `
+          SELECT jewel_code, style_no, category, tag_price, cost_price,
+                 ageing_days, gross_wt, pure_wt, tot_dia_wt, stock_type, location,
+                 image_url, base_metal, current_status
+          FROM live_stock_items
+          WHERE current_status = 'On Hand'
+        `;
+        if (weightMin) candidateQuery += ` AND CAST(NULLIF(TRIM(gross_wt), '') AS NUMERIC) >= ${Number(weightMin)}`;
+        if (weightMax) candidateQuery += ` AND CAST(NULLIF(TRIM(gross_wt), '') AS NUMERIC) <= ${Number(weightMax)}`;
+        candidateQuery += ` ORDER BY tag_price DESC LIMIT 300`;
+
+        const candidateResult = await db.execute(sql.raw(candidateQuery));
+        fallbackCandidates = (candidateResult.rows as Record<string, unknown>[]).map(row => ({
+          jewelCode: String(row.jewel_code || ""),
+          styleNo: String(row.style_no || ""),
+          category: String(row.category || ""),
+          tagPrice: Number(row.tag_price) || 0,
+          costPrice: Number(row.cost_price) || 0,
+          ageingDays: Number(row.ageing_days) || 0,
+          grossWt: String(row.gross_wt || "0"),
+          pureWt: String(row.pure_wt || "0"),
+          totDiaWt: String(row.tot_dia_wt || "0"),
+          stockType: String(row.stock_type || ""),
+          location: String(row.location || ""),
+          imageUrl: String(row.image_url || ""),
+          baseMetal: String(row.base_metal || ""),
+          currentStatus: String(row.current_status || ""),
+        }));
+      }
+
+      // Run scoring (vector path if embeddings exist, formula fallback otherwise)
+      const { scoreAssortment } = await import("./assortment-scorer");
+      const result = await scoreAssortment(
+        sales, fallbackCandidates, bdmName, stateName, clientName,
+        kitSize, weightMin, weightMax
+      );
+
+      // Map to frontend shape
+      const responseItems = result.items.slice(0, kitSize * 3).map(item => {
+        const c = item.inventoryData;
+        const tier = item.total >= 70 ? "MUST INCLUDE" : item.total >= 45 ? "RECOMMENDED" : item.total >= 20 ? "OPTIONAL" : null;
+        const ageTag = c.ageingDays <= 90 ? "Fresh" : c.ageingDays <= 180 ? "Watch" : c.ageingDays <= 365 ? "Slow" : "Dead Stock";
+        return {
+          jewelCode: c.jewelCode,
+          styleNo: c.styleNo,
+          category: c.category,
+          tagPrice: c.tagPrice,
+          costPrice: c.costPrice,
+          ageingDays: c.ageingDays,
+          ageTag,
+          grossWt: c.grossWt,
+          pureWt: c.pureWt,
+          totDiaWt: c.totDiaWt,
+          baseMetal: c.baseMetal,
+          stockType: c.stockType,
+          location: c.location,
+          imageUrl: c.imageUrl,
+          score: item.total,
+          tier,
+          reasons: item.reasons,
+          scoreBreakdown: item.breakdown,
+        };
+      });
+
+      res.json({
+        items: responseItems,
+        profile: result.profile,
+        timing: result.timing,
+      });
+    } catch (error: unknown) {
+      console.error("[ai-score] Error:", error);
       const msg = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: msg });
     }
