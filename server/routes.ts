@@ -36,7 +36,10 @@ import {
 import { addVector, searchSimilarVectors, clearVectorStore, migrateJsonToVector } from "./vector-store";
 import { insertDesignProjectSchema, insertReferenceImageSchema, driveImportRequestSchema, designProjectInputSchema, insertDesignFeedbackSchema, type DesignFeedback, THEME_CODES } from "@shared/schema";
 import { addFeedbackVector, updateFeedbackVector, searchSimilarFeedback } from "./feedback-vector-store";
+import { fireAndForgetEvaluation } from "./evaluator";
+import { getActivePrompt, seedPromptVersions, incrementGenerationCount, activatePromptVersion, invalidatePromptCache, type PromptScope } from "./prompt-registry";
 import { extractFolderId, listImagesInFolder, downloadImage } from "./google-drive";
+import { startBatchImport, startBatchReembed, getBatchImportStatus } from "./batch-import";
 import { searchSimilarStockItems } from "./stock-vector-store";
 import { read as xlsxRead, utils as xlsxUtils } from "xlsx";
 
@@ -481,7 +484,14 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  
+
+  // Seed prompt versions on startup (no-op if already seeded)
+  seedPromptVersions([
+    { scope: "brand_rules", text: BRAND_RULES },
+    { scope: "cad_rules", text: CAD_RULES },
+    { scope: "grok_preamble", text: GROK_SKETCH_PREAMBLE },
+  ]).catch(() => { /* table may not exist yet */ });
+
   // Upload reference image
   app.post("/api/reference-images", upload.single('image'), async (req, res) => {
     try {
@@ -803,6 +813,13 @@ export async function registerRoutes(
         }
       };
 
+      // Load active prompts from registry (falls back to hardcoded constants)
+      const [activeBrand, activeCad, activeGrok] = await Promise.all([
+        getActivePrompt("brand_rules", BRAND_RULES),
+        getActivePrompt("cad_rules", CAD_RULES),
+        getActivePrompt("grok_preamble", GROK_SKETCH_PREAMBLE),
+      ]);
+
       const [geminiResult, openaiResult, grokResult] = await (async () => {
         if (mode === "cad") {
           // CAD mode: JSON spec prefixed with CAD_RULES (polki size is inside the JSON spec)
@@ -814,10 +831,10 @@ export async function registerRoutes(
             timedGenerate("Grok", () => generateImageWithGrok(cadPrompt, grokAspect)),
           ]);
         } else {
-          // Sketch mode: JSON spec prefixed with BRAND_RULES (polki size is inside the JSON spec)
-          const fullPrompt = `${BRAND_RULES}\n\n${enrichedImagePrompt}`;
+          // Sketch mode: JSON spec prefixed with active BRAND_RULES from prompt registry
+          const fullPrompt = `${activeBrand.text}\n\n${enrichedImagePrompt}`;
           // Grok: use condensed preamble instead of full BRAND_RULES (8000-char limit)
-          const grokPrompt = `${GROK_SKETCH_PREAMBLE}\n\n${enrichedImagePrompt}`;
+          const grokPrompt = `${activeGrok.text}\n\n${enrichedImagePrompt}`;
           console.log(`[generate-design] FULL PROMPT (${fullPrompt.length} chars), GROK PROMPT (${grokPrompt.length} chars):\n${"═".repeat(80)}\n${fullPrompt}\n${"═".repeat(80)}`);
           return Promise.allSettled([
             timedGenerate("Gemini", () => generateJewellerySketch(fullPrompt)),
@@ -887,6 +904,26 @@ export async function registerRoutes(
         openai: toModelResult(openaiResult, "gpt-image-1"),
         grok: toModelResult(grokResult, "grok-imagine-image"),
       });
+
+      // ── Fire-and-forget: evaluate each model result + track prompt version ──
+      const evalContext = {
+        category,
+        motifs: motifs || [],
+        stones: stoneName || [],
+        materialRatio,
+        mode: (mode === "cad" ? "cad" : "sketch") as "sketch" | "cad",
+      };
+      const activeVersionId = mode === "cad" ? activeCad.versionId : activeBrand.versionId;
+      incrementGenerationCount(activeVersionId).catch(() => {});
+
+      const geminiUrl = geminiResult.status === "fulfilled" ? geminiResult.value : null;
+      const openaiUrl = openaiResult.status === "fulfilled" ? openaiResult.value : null;
+      const grokUrl = grokResult.status === "fulfilled" ? grokResult.value : null;
+
+      const evalFn = storage.createEvaluation.bind(storage);
+      fireAndForgetEvaluation(designProject.id, "gemini", geminiUrl, evalContext, activeVersionId, evalFn);
+      fireAndForgetEvaluation(designProject.id, "openai", openaiUrl, evalContext, activeVersionId, evalFn);
+      fireAndForgetEvaluation(designProject.id, "grok", grokUrl, evalContext, activeVersionId, evalFn);
     } catch (error: any) {
       Sentry.captureException(error);
       console.error("Error generating design:", error);
@@ -1134,157 +1171,41 @@ export async function registerRoutes(
     }
   });
 
-  // Import images from Google Drive folder
+  // Import images from Google Drive folder via Gemini Batch API
+  // Returns immediately — processing happens asynchronously. Poll /api/batch-import/status.
   app.post("/api/import-from-drive", async (req, res) => {
     try {
-      // Validate request body
       const parseResult = driveImportRequestSchema.safeParse(req.body);
       if (!parseResult.success) {
         return res.status(400).json({ error: parseResult.error.errors[0]?.message || "Invalid request" });
       }
-      
       const { folderUrl, themeCode } = parseResult.data;
-
-      // Extract folder ID from URL
-      const folderId = extractFolderId(folderUrl);
-
-      // List images in folder
-      const files = await listImagesInFolder(folderId);
-      
-      if (files.length === 0) {
-        return res.status(400).json({ error: "No images found in the folder" });
+      const result = await startBatchImport(folderUrl, themeCode ?? "");
+      if (!result.started) {
+        return res.status(409).json({ error: result.error });
       }
-
-      const results: { filename: string; success: boolean; error?: string }[] = [];
-      let processed = 0;
-
-      // Process each image
-      for (const file of files) {
-        try {
-          // Download image from Drive
-          const imageBuffer = await downloadImage(file.id);
-          const base64Image = imageBuffer.toString('base64');
-
-          // Analyze the image using Gemini Vision
-          const analysis = await analyzeReferenceImage(base64Image);
-
-          // Generate multimodal embedding for similarity search (using image directly)
-          const embedding = await generateImageEmbedding(base64Image);
-
-          // Save to uploads folder
-          const uploadPath = `uploads/${Date.now()}_${file.name}`;
-          await fs.writeFile(uploadPath, imageBuffer);
-
-          // Generate thumbnail
-          const thumbnailFilename = `thumb_${path.basename(uploadPath)}`;
-          const thumbnailPath = path.join('uploads', thumbnailFilename);
-          await sharp(imageBuffer)
-            .resize(300, 300, { fit: 'cover', position: 'center' })
-            .jpeg({ quality: 80 })
-            .toFile(thumbnailPath);
-
-          // Store in database
-          const referenceImage = await storage.createReferenceImage({
-            filename: file.name,
-            filepath: uploadPath,
-            thumbnailPath: thumbnailPath,
-            metadata: analysis,
-            embedding: embedding as any,
-            themeCode: themeCode,
-          });
-
-          // Add to vector store for similarity search (include themeCode in metadata)
-          await addVector(referenceImage.id, embedding, { ...analysis, themeCode });
-
-          results.push({ filename: file.name, success: true });
-        } catch (error: any) {
-          console.error(`Error processing ${file.name}:`, error);
-          results.push({ filename: file.name, success: false, error: error.message });
-        }
-        processed++;
-      }
-
-      const successCount = results.filter(r => r.success).length;
-      const failCount = results.filter(r => !r.success).length;
-
-      res.json({
-        total: files.length,
-        success: successCount,
-        failed: failCount,
-        results
-      });
+      res.json({ message: "Batch import started. Poll /api/batch-import/status for progress.", status: getBatchImportStatus() });
     } catch (error: any) {
-      console.error("Error importing from Drive:", error);
+      console.error("Error starting batch import:", error);
       res.status(500).json({ error: error.message });
     }
   });
 
-  // Re-analyze and re-embed all reference images with enhanced style metadata
+  // Poll batch import / reembed progress
+  app.get("/api/batch-import/status", (_req, res) => {
+    res.json(getBatchImportStatus());
+  });
+
+  // Re-analyze and re-embed all reference images via Gemini Batch API
   app.post("/api/reembed-references", async (req, res) => {
     try {
-      // Get all reference images
-      const images = await storage.getAllReferenceImages();
-      
-      if (images.length === 0) {
-        return res.json({ message: "No reference images to re-embed", total: 0, success: 0, failed: 0 });
+      const result = await startBatchReembed();
+      if (!result.started) {
+        return res.status(409).json({ error: result.error });
       }
-
-      // Clear existing vectors
-      await clearVectorStore();
-
-      const results: { id: string; filename: string; success: boolean; error?: string }[] = [];
-
-      // Re-analyze and re-embed each image with enhanced style extraction
-      for (const image of images) {
-        try {
-          // Read the image file
-          const fileBuffer = await fs.readFile(image.filepath);
-          const base64Image = fileBuffer.toString('base64');
-
-          // Re-analyze image with enhanced style metadata extraction
-          const analysis = await analyzeReferenceImage(base64Image);
-          
-          // Generate new embedding from the analysis description
-          const embedding = await generateImageEmbedding(base64Image);
-
-          // Merge new analysis into existing metadata to preserve any custom fields
-          // Also ensure themeCode is set (from column or existing metadata)
-          const existingMetadata = (image.metadata as Record<string, any>) || {};
-          const themeCode = image.themeCode || existingMetadata.themeCode || null;
-          const updatedMetadata = { 
-            ...existingMetadata, // preserve any existing custom fields
-            ...analysis, // add/update with new vision analysis
-            themeCode // ensure themeCode is preserved
-          };
-
-          // Update the reference image metadata in database (including pgvector column)
-          await db.update(referenceImages)
-            .set({ 
-              metadata: updatedMetadata,
-              embedding: embedding as any,
-              embeddingVector: embedding // pgvector column
-            })
-            .where(eq(referenceImages.id, image.id));
-
-          results.push({ id: image.id, filename: image.filename, success: true });
-        } catch (error: any) {
-          console.error(`Error re-embedding ${image.filename}:`, error);
-          results.push({ id: image.id, filename: image.filename, success: false, error: error.message });
-        }
-      }
-
-      const successCount = results.filter(r => r.success).length;
-      const failCount = results.filter(r => !r.success).length;
-
-      res.json({
-        message: "Re-embedding complete with enhanced style metadata",
-        total: images.length,
-        success: successCount,
-        failed: failCount,
-        results
-      });
+      res.json({ message: "Batch re-embed started. Poll /api/batch-import/status for progress.", status: getBatchImportStatus() });
     } catch (error: any) {
-      console.error("Error re-embedding references:", error);
+      console.error("Error starting batch re-embed:", error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -2925,6 +2846,410 @@ export async function registerRoutes(
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: msg });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ── SELF-IMPROVING IMAGE GENERATION ENDPOINTS ──────────────────────────
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // GET /api/evaluations — list evaluations with optional filters
+  app.get("/api/evaluations", async (req, res) => {
+    try {
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+      const model = (req.query.model as string) || undefined;
+      const promptVersionId = (req.query.promptVersionId as string) || undefined;
+
+      const [items, total] = await Promise.all([
+        storage.getEvaluations(page, limit, model, promptVersionId),
+        storage.countEvaluations(model, promptVersionId),
+      ]);
+
+      res.json({ items, total, page, limit });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // GET /api/evaluations/summary — aggregate scores by dimension/model/time
+  app.get("/api/evaluations/summary", async (req, res) => {
+    try {
+      const result = await db.execute(sql`
+        SELECT
+          model_provider,
+          COUNT(*)::int as total,
+          ROUND(AVG(brand_compliance)::numeric, 2) as avg_brand_compliance,
+          ROUND(AVG(view_angle)::numeric, 2) as avg_view_angle,
+          ROUND(AVG(composition)::numeric, 2) as avg_composition,
+          ROUND(AVG(motif_accuracy)::numeric, 2) as avg_motif_accuracy,
+          ROUND(AVG(stone_rendering)::numeric, 2) as avg_stone_rendering,
+          ROUND(AVG(gold_balance)::numeric, 2) as avg_gold_balance,
+          ROUND(AVG(overall_quality)::numeric, 2) as avg_overall_quality
+        FROM design_evaluations
+        GROUP BY model_provider
+        ORDER BY model_provider
+      `);
+
+      // Time series: daily averages over last 30 days
+      const timeSeries = await db.execute(sql`
+        SELECT
+          DATE(evaluated_at) as date,
+          model_provider,
+          ROUND(AVG(overall_quality)::numeric, 2) as avg_quality,
+          COUNT(*)::int as count
+        FROM design_evaluations
+        WHERE evaluated_at > NOW() - INTERVAL '30 days'
+        GROUP BY DATE(evaluated_at), model_provider
+        ORDER BY date
+      `);
+
+      res.json({
+        byModel: result.rows,
+        timeSeries: timeSeries.rows,
+      });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // GET /api/evaluations/project/:id — evaluations for a specific design project
+  app.get("/api/evaluations/project/:id", async (req, res) => {
+    try {
+      const items = await storage.getEvaluationsByProject(req.params.id);
+      res.json({ items });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // POST /api/evaluate-design/:id — manually trigger evaluation for a design project
+  app.post("/api/evaluate-design/:id", async (req, res) => {
+    try {
+      const project = await storage.getDesignProject(req.params.id);
+      if (!project) return res.status(404).json({ error: "Design project not found" });
+
+      const evalContext = {
+        category: project.category,
+        motifs: project.motifs || [],
+        stones: project.stones || [],
+        materialRatio: project.materialRatio,
+        mode: "sketch" as const,
+      };
+
+      const { evaluateDesignQuality } = await import("./evaluator");
+      const scores = await evaluateDesignQuality(project.generatedImageUrl || "", evalContext);
+      if (!scores) return res.status(500).json({ error: "Evaluation returned no scores" });
+
+      const evaluation = await storage.createEvaluation({
+        designProjectId: project.id,
+        modelProvider: "manual",
+        imageUrl: project.generatedImageUrl || "",
+        ...scores,
+        promptVersionId: null,
+      });
+
+      res.json(evaluation);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // GET /api/prompt-versions — list all prompt versions
+  app.get("/api/prompt-versions", async (req, res) => {
+    try {
+      const scope = (req.query.scope as string) || undefined;
+      const versions = await storage.getPromptVersions(scope);
+      res.json({ items: versions });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // POST /api/prompt-versions/:id/activate — activate a specific prompt version
+  app.post("/api/prompt-versions/:id/activate", async (req, res) => {
+    try {
+      const version = (await storage.getPromptVersions()).find(v => v.id === req.params.id);
+      if (!version) return res.status(404).json({ error: "Prompt version not found" });
+
+      await activatePromptVersion(version.id, version.scope as PromptScope);
+      res.json({ success: true, activated: version.id, scope: version.scope });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // GET /api/optimization-runs — list optimization runs
+  app.get("/api/optimization-runs", async (_req, res) => {
+    try {
+      const result = await db.execute(sql`
+        SELECT * FROM optimization_runs ORDER BY started_at DESC LIMIT 50
+      `);
+      res.json({ items: result.rows });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // POST /api/optimize-prompts — trigger prompt optimization run
+  app.post("/api/optimize-prompts", async (req, res) => {
+    try {
+      const scope = (req.body?.scope || "brand_rules") as PromptScope;
+      if (!["brand_rules", "cad_rules", "grok_preamble"].includes(scope)) {
+        return res.status(400).json({ error: "Invalid scope" });
+      }
+
+      // Import dynamically to avoid circular deps at startup
+      const { optimizePrompts } = await import("./prompt-optimizer");
+      const result = await optimizePrompts(scope);
+      res.json(result);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // ── Bulk import assortment images as references ────────────────────────────
+  // Progress state for the background job
+  let assortImportJob: { running: boolean; total: number; processed: number; success: number; failed: number; results: { styleCode: string; success: boolean; error?: string }[] } = {
+    running: false, total: 0, processed: 0, success: 0, failed: 0, results: [],
+  };
+
+  // Helper: extract theme code from style code (e.g., FQBRP03802NLS → BRP)
+  function extractThemeCode(styleCode: string): string | null {
+    const themePatterns = ["BRU", "BRP", "BRC", "CLO", "WRO", "WRD", "SOP", "SOO", "SOD"];
+    const upper = styleCode.toUpperCase();
+    for (const tc of themePatterns) {
+      if (upper.includes(tc)) return tc;
+    }
+    // Handle CLP → CLO, SOLP → SOP
+    if (upper.includes("CLP")) return "CLO";
+    if (upper.includes("SOLP")) return "SOP";
+    return null;
+  }
+
+  // Helper: map theme code → product segment
+  function themeToSegment(themeCode: string | null): string {
+    if (!themeCode) return "Traditional";
+    const map: Record<string, string> = {
+      BRP: "Bridal", BRC: "Bridal", BRU: "Bridal",
+      CLO: "Traditional", WRO: "Traditional", WRD: "Modern",
+      SOP: "Exclusive - Grandeur", SOO: "Modern", SOD: "Modern",
+    };
+    return map[themeCode] || "Traditional";
+  }
+
+  // Helper: normalize assortment category to reference category
+  function normalizeCategory(cat: string): string {
+    const map: Record<string, string> = {
+      "NECKLACE SET": "Necklace Set",
+      "CHOKAR SET": "Choker Set",
+      "CHOKER SET": "Choker Set",
+      "LONG NECKLACE SET": "Long Necklace Set",
+      "LONG NECKLACE": "Long Necklace",
+      "NECKLACE": "Necklace",
+      "CHOKAR": "Choker",
+      "CHOKER": "Choker",
+      "BANGLE": "Bangle",
+      "PENDANT": "Pendant",
+      "EARRING": "Earrings",
+      "RING": "Ring",
+      "BRACELET": "Bracelet",
+    };
+    return map[cat.toUpperCase()] || cat;
+  }
+
+  app.post("/api/import-assortment-references", async (req, res) => {
+    if (assortImportJob.running) {
+      return res.status(409).json({ error: "Import already in progress", progress: assortImportJob });
+    }
+
+    try {
+      const itemsPath = path.resolve("assortment-items.json");
+      const imagesDir = path.resolve("assortment-images");
+      const raw = await fs.readFile(itemsPath, "utf-8");
+      const items: { styleCode: string; category: string; price: string; ageing: string; filename: string }[] = JSON.parse(raw);
+
+      assortImportJob = { running: true, total: items.length, processed: 0, success: 0, failed: 0, results: [] };
+
+      // Return immediately — process in background
+      res.json({ message: `Started importing ${items.length} assortment items as references`, total: items.length });
+
+      // Background processing
+      for (const item of items) {
+        try {
+          const srcPath = path.join(imagesDir, item.filename);
+          const fileBuffer = await fs.readFile(srcPath);
+          const base64Image = fileBuffer.toString("base64");
+
+          // Copy to uploads/ with timestamp
+          const ext = path.extname(item.filename) || ".jpg";
+          const uploadFilename = `${Date.now()}-${item.styleCode}${ext}`;
+          const uploadPath = path.join("uploads", uploadFilename);
+          await fs.writeFile(uploadPath, fileBuffer);
+
+          // Generate thumbnail
+          const thumbFilename = `thumb_${uploadFilename}`;
+          const thumbPath = path.join("uploads", thumbFilename);
+          await sharp(fileBuffer)
+            .resize(300, 300, { fit: "cover", position: "center" })
+            .jpeg({ quality: 80 })
+            .toFile(thumbPath);
+
+          // Gemini Vision analysis
+          const analysis = await analyzeReferenceImage(base64Image);
+
+          // Generate embedding
+          const embedding = await generateImageEmbedding(base64Image);
+
+          // Derive theme code and segment
+          const themeCode = extractThemeCode(item.styleCode);
+          const productSegment = themeToSegment(themeCode);
+          const category = normalizeCategory(item.category);
+
+          // Store in DB
+          const referenceImage = await storage.createReferenceImage({
+            filename: `${item.styleCode}${ext}`,
+            filepath: uploadPath,
+            thumbnailPath: thumbPath,
+            themeCode,
+            productSegment,
+            category,
+            metadata: {
+              ...analysis,
+              styleCode: item.styleCode,
+              tagPrice: item.price,
+              ageingDays: item.ageing,
+              source: "assortment-import",
+            },
+            embedding: embedding as unknown as Record<string, unknown>,
+          });
+
+          // Add to vector store
+          await addVector(referenceImage.id, embedding, {
+            ...analysis,
+            themeCode,
+            productSegment,
+            category,
+            styleCode: item.styleCode,
+          });
+
+          assortImportJob.success++;
+          assortImportJob.results.push({ styleCode: item.styleCode, success: true });
+          console.log(`[assort-import] ✓ ${assortImportJob.processed + 1}/${items.length} ${item.styleCode} → ${category} (${themeCode || "?"})`);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          assortImportJob.failed++;
+          assortImportJob.results.push({ styleCode: item.styleCode, success: false, error: msg });
+          console.error(`[assort-import] ✗ ${item.styleCode}: ${msg}`);
+        }
+        assortImportJob.processed++;
+      }
+
+      assortImportJob.running = false;
+      console.log(`[assort-import] Done: ${assortImportJob.success} ok, ${assortImportJob.failed} failed out of ${items.length}`);
+    } catch (error: unknown) {
+      assortImportJob.running = false;
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("[assort-import] Fatal error:", msg);
+      if (!res.headersSent) res.status(500).json({ error: msg });
+    }
+  });
+
+  // Check progress of assortment import
+  app.get("/api/import-assortment-references/status", (_req, res) => {
+    res.json(assortImportJob);
+  });
+
+  // Retry failed assortment imports with delay between each to avoid rate limits
+  // Accepts optional body: { styleCodes: string[] } to retry specific items
+  app.post("/api/import-assortment-references/retry", async (req, res) => {
+    if (assortImportJob.running) {
+      return res.status(409).json({ error: "Import already in progress" });
+    }
+
+    // Accept explicit list from body, or fall back to in-memory failures
+    const explicitCodes: string[] | undefined = req.body?.styleCodes;
+    const failedCodes = explicitCodes?.length
+      ? explicitCodes
+      : assortImportJob.results.filter(r => !r.success).map(r => r.styleCode);
+    if (failedCodes.length === 0) {
+      return res.json({ message: "No failed items to retry" });
+    }
+
+    try {
+      const itemsPath = path.resolve("assortment-items.json");
+      const imagesDir = path.resolve("assortment-images");
+      const raw = await fs.readFile(itemsPath, "utf-8");
+      const allItems: { styleCode: string; category: string; price: string; ageing: string; filename: string }[] = JSON.parse(raw);
+      const retryItems = allItems.filter(i => failedCodes.includes(i.styleCode));
+
+      assortImportJob = { running: true, total: retryItems.length, processed: 0, success: 0, failed: 0, results: [] };
+      res.json({ message: `Retrying ${retryItems.length} failed items with 3s delay between each`, total: retryItems.length });
+
+      for (const item of retryItems) {
+        // 15s delay between items to avoid Gemini rate limits
+        await new Promise(resolve => setTimeout(resolve, 15000));
+
+        // Inner retry: up to 3 attempts with exponential backoff for 503 errors
+        let succeeded = false;
+        for (let attempt = 1; attempt <= 3 && !succeeded; attempt++) {
+          try {
+            const srcPath = path.join(imagesDir, item.filename);
+            const fileBuffer = await fs.readFile(srcPath);
+            const base64Image = fileBuffer.toString("base64");
+            const ext = path.extname(item.filename) || ".jpg";
+            const uploadFilename = `${Date.now()}-${item.styleCode}${ext}`;
+            const uploadPath = path.join("uploads", uploadFilename);
+            await fs.writeFile(uploadPath, fileBuffer);
+            const thumbFilename = `thumb_${uploadFilename}`;
+            const thumbPath = path.join("uploads", thumbFilename);
+            await sharp(fileBuffer).resize(300, 300, { fit: "cover", position: "center" }).jpeg({ quality: 80 }).toFile(thumbPath);
+            const analysis = await analyzeReferenceImage(base64Image);
+            const embedding = await generateImageEmbedding(base64Image);
+            const themeCode = extractThemeCode(item.styleCode);
+            const productSegment = themeToSegment(themeCode);
+            const category = normalizeCategory(item.category);
+            const referenceImage = await storage.createReferenceImage({
+              filename: `${item.styleCode}${ext}`,
+              filepath: uploadPath, thumbnailPath: thumbPath, themeCode, productSegment, category,
+              metadata: { ...analysis, styleCode: item.styleCode, tagPrice: item.price, ageingDays: item.ageing, source: "assortment-import" },
+              embedding: embedding as unknown as Record<string, unknown>,
+            });
+            await addVector(referenceImage.id, embedding, { ...analysis, themeCode, productSegment, category, styleCode: item.styleCode });
+            assortImportJob.success++;
+            assortImportJob.results.push({ styleCode: item.styleCode, success: true });
+            console.log(`[assort-retry] ✓ ${assortImportJob.processed + 1}/${retryItems.length} ${item.styleCode} (attempt ${attempt})`);
+            succeeded = true;
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            const is503 = msg.includes("503") || msg.includes("UNAVAILABLE") || msg.includes("high demand");
+            if (is503 && attempt < 3) {
+              const backoff = attempt * 20000; // 20s, 40s
+              console.warn(`[assort-retry] ${item.styleCode} attempt ${attempt} got 503, waiting ${backoff/1000}s...`);
+              await new Promise(resolve => setTimeout(resolve, backoff));
+            } else {
+              assortImportJob.failed++;
+              assortImportJob.results.push({ styleCode: item.styleCode, success: false, error: msg });
+              console.error(`[assort-retry] ✗ ${item.styleCode} (attempt ${attempt}): ${msg}`);
+            }
+          }
+        }
+        assortImportJob.processed++;
+      }
+      assortImportJob.running = false;
+      console.log(`[assort-retry] Done: ${assortImportJob.success} ok, ${assortImportJob.failed} failed`);
+    } catch (error: unknown) {
+      assortImportJob.running = false;
+      const msg = error instanceof Error ? error.message : String(error);
+      if (!res.headersSent) res.status(500).json({ error: msg });
     }
   });
 
