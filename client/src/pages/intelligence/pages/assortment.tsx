@@ -27,43 +27,57 @@ const REASON_PILL: Record<string, { cls: string; ico: string }> = {
   seen:      { cls: "bg-[#F5F5F5] text-[#555]",              ico: "\uD83D\uDC41\uFE0F" },
 };
 
-/* ── Tier config matching live HTML (.tier-must, .tier-rec, .tier-opt) ── */
-const TIER_CONFIG = {
-  "MUST INCLUDE": {
-    cls: "bg-[#FDEAEA] text-[#8B1A1A] border border-[#f5c6c6]",
-    label: "\uD83C\uDFAF Must Include",
-    sub: "These items best match the client\u2019s history, price band & are aged \u2014 include all",
-  },
-  RECOMMENDED: {
-    cls: "bg-[#E8F0FE] text-[#1A56CC] border border-[#c5d8f8]",
-    label: "\u2728 Recommended",
-    sub: "Strong match \u2014 good conversion probability",
-  },
-  OPTIONAL: {
-    cls: "bg-[#F5F5F5] text-[#555] border border-[#ddd]",
-    label: "\uD83D\uDCA1 Optional",
-    sub: "Lower match score \u2014 include for variety if kit has space",
-  },
-} as const;
-
 function getTier(score: number): "MUST INCLUDE" | "RECOMMENDED" | "OPTIONAL" | null {
-  if (score >= 70) return "MUST INCLUDE";
-  if (score >= 45) return "RECOMMENDED";
+  if (score >= 65) return "MUST INCLUDE";
+  if (score >= 40) return "RECOMMENDED";
   if (score >= 20) return "OPTIONAL";
   return null;
 }
 
-/* ── Set pairing: group necklace + earring by shared style root ── */
-// Earring suffixes end in E (e.g. NSE, LNSE, CHSE). Strip trailing E to get root.
+/* ── Product segment from style code ── */
+const PRODUCT_SEGMENTS = [
+  "Bridal", "Bridal Lite", "Traditional", "Modern", "RTW",
+  "Ear Essentials", "Handwear", "Add-ons", "Exclusive - Grandeur",
+] as const;
+function getSegmentFromStyle(styleNo: string | undefined, cat?: string): string {
+  if (!styleNo) return "Traditional";
+  const u = styleNo.toUpperCase();
+  const c = (cat || "").toLowerCase();
+  // Theme-code based mapping
+  if (u.includes("BRP") || u.includes("BRU")) return "Bridal";
+  if (u.includes("BRC")) return "Bridal Lite";
+  if (u.includes("SOP") || u.includes("SOLP")) return "Exclusive - Grandeur";
+  if (u.includes("WRD") || u.includes("SOO") || u.includes("SOD")) {
+    // Subcategorize Modern by category
+    if (c.includes("chain") || c.includes("pendant")) return "RTW";
+    if (c.includes("earring") || c.includes("stud") || c.includes("drop") || c.includes("hoop")) return "Ear Essentials";
+    if (c.includes("bracelet") || c.includes("bangle") || c.includes("hathphool") || c.includes("ring")) return "Handwear";
+    if (c.includes("nosepin") || c.includes("nath") || c.includes("mangtika") || c.includes("brooch") || c.includes("button") || c.includes("kalingi") || c.includes("kanauti") || c.includes("mala")) return "Add-ons";
+    return "Modern";
+  }
+  if (u.includes("CLO") || u.includes("CLP") || u.includes("WRO")) return "Traditional";
+  return "Traditional";
+}
+
+/* ── Clearance detection ── */
+function isClearance(i: { ageTag: string; ageingDays: number }): boolean {
+  return i.ageTag === "Slow Moving" || i.ageTag === "Ageing" || i.ageTag === "Non-Moving" ||
+    i.ageTag === "Slow" || i.ageTag === "Dead Stock" || i.ageingDays > 90;
+}
+
+/* ── Set pairing: group necklace + earring by shared design prefix ── */
+// Set suffixes: LNS/LNSE, NS/NSE, CHS/CHSE, PNS/PNSE, CNS/CNSE.
+// Variant suffixes (-1, -2) are kept as part of the root so that
+// LNS-1 pairs only with LNSE-1, NOT with LNS-2 or LNSE-2.
+const SET_SUFFIX_RE = /^(.*?)(NLSE|LNSE|CHSE|PNSE|CNSE|NSE|NLS|LNS|CHS|PNS|CNS|NS|CS)(-\d+)?$/;
+
 function pairRoot(styleCode: string | undefined): string | null {
   if (!styleCode) return null;
   const s = styleCode.toUpperCase().trim();
-  const m = s.match(/^(.+?)(NLSE|LNSE|CHSE|PNSE|CNSE|NSE|LNS|NLS|CHS|PNS|CNS|NS|CS)(-\d+)?$/);
+  const m = s.match(SET_SUFFIX_RE);
   if (!m) return null;
-  const prefix = m[1];
-  let suffix = m[2];
-  if (/E$/.test(suffix)) suffix = suffix.slice(0, -1);
-  return prefix + suffix + (m[3] || "");
+  // Include variant in root: "OQCLO47111" + "-1" → "OQCLO47111-1"
+  return m[1] + (m[3] || "");
 }
 
 function isEarringHalf(styleCode: string | undefined): boolean {
@@ -74,6 +88,7 @@ function isEarringHalf(styleCode: string | undefined): boolean {
 interface SetGroup {
   type: "single" | "set";
   items: AssortSuggestion[];
+  standaloneFromSet?: boolean;
 }
 
 interface DecisionState {
@@ -90,6 +105,9 @@ export default function AssortmentPlanner() {
   const [selectedClient, setSelectedClient] = useState("");
   const [kitSize, setKitSize] = useState(100);
   const [clearancePct, setClearancePct] = useState(30);
+  const [metalWtMax, setMetalWtMax] = useState(100);
+  const [selectedSegment, setSelectedSegment] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("");
   const [weightMin, setWeightMin] = useState("");
   const [weightMax, setWeightMax] = useState("");
   const [localGoldPrice, setLocalGoldPrice] = useState(goldPrice || 0);
@@ -103,6 +121,18 @@ export default function AssortmentPlanner() {
   const [aiItems, setAiItems] = useState<AiScoredItem[]>([]);
   const [aiProfile, setAiProfile] = useState<AiScoreProfile | null>(null);
   const [aiTiming, setAiTiming] = useState<{ totalMs: number; method: "vector" | "formula" } | null>(null);
+
+  /** Reset results when any filter changes — shows generate button again */
+  const resetResults = useCallback(() => {
+    if (generated) {
+      setGenerated(false);
+      setDecisions({});
+      setAiItems([]);
+      setAiProfile(null);
+      setAiTiming(null);
+      setScoringError(null);
+    }
+  }, [generated]);
   const [elapsedSec, setElapsedSec] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -121,8 +151,8 @@ export default function AssortmentPlanner() {
   const statesForBdm = statesData?.states || [];
 
   const { data: clientsData } = useQuery({
-    queryKey: ["b2b-bdm-clients", selectedBdm],
-    queryFn: () => fetchB2bClientsForBdm(selectedBdm),
+    queryKey: ["b2b-bdm-clients", selectedBdm, selectedState],
+    queryFn: () => fetchB2bClientsForBdm(selectedBdm, selectedState || undefined),
     enabled: !!selectedBdm,
   });
   const clientsForBdm = clientsData?.clients || [];
@@ -160,6 +190,7 @@ export default function AssortmentPlanner() {
       tier: item.tier || getTier(item.score) || undefined,
       location: item.location,
       scoreBreakdown: item.scoreBreakdown,
+      targetClient: item.targetClient,
     }));
 
     if (weightMin) {
@@ -171,34 +202,132 @@ export default function AssortmentPlanner() {
       if (!isNaN(max)) items = items.filter((i) => i.grossWt <= max);
     }
 
-    return items.slice(0, kitSize * 3);
-  }, [generated, aiItems, kitSize, weightMin, weightMax]);
-
-  /* ── Tier buckets ── */
-  const tiers = useMemo(() => {
-    const RANIWALA_LOCS = ["RANIWALA", "JAIPUR STORE", "DELHI STORE"];
-    const isRaniwala = (loc: string | undefined) =>
-      loc ? RANIWALA_LOCS.some((r) => loc.toUpperCase().includes(r)) : false;
-
-    // Sort: Raniwala locations first, then by score descending
-    const sortByLocation = (items: AssortSuggestion[]) =>
-      items.sort((a, b) => {
-        const aR = isRaniwala(a.location) ? 0 : 1;
-        const bR = isRaniwala(b.location) ? 0 : 1;
-        if (aR !== bR) return aR - bR;
-        return b.score - a.score;
-      });
-
-    const must: AssortSuggestion[] = [];
-    const recommended: AssortSuggestion[] = [];
-    const optional: AssortSuggestion[] = [];
-    for (const item of suggestions) {
-      const tier = item.tier || getTier(item.score);
-      if (tier === "MUST INCLUDE") must.push(item);
-      else if (tier === "RECOMMENDED") recommended.push(item);
-      else if (tier === "OPTIONAL") optional.push(item);
+    // Filter by pure metal weight (grams)
+    if (metalWtMax < 100) {
+      items = items.filter((i) => (i.pureWt || 0) <= metalWtMax);
     }
-    return { must: sortByLocation(must), recommended: sortByLocation(recommended), optional: sortByLocation(optional) };
+
+    // Filter by product segment (derived from style code)
+    if (selectedSegment) {
+      items = items.filter((i) => getSegmentFromStyle(i.styleNo, i.cat) === selectedSegment);
+    }
+
+    // Filter by category
+    if (selectedCategory) {
+      items = items.filter((i) => i.cat === selectedCategory);
+    }
+
+    // Cap clearance items to clearancePct% of kitSize
+    if (clearancePct < 70) {
+      const maxClearance = Math.ceil((kitSize * clearancePct) / 100);
+      const clearanceItems: typeof items = [];
+      const freshItems: typeof items = [];
+      for (const i of items) {
+        if (isClearance(i)) {
+          clearanceItems.push(i);
+        } else {
+          freshItems.push(i);
+        }
+      }
+      const cappedClearance = clearanceItems.slice(0, maxClearance);
+      const freshNeeded = kitSize - cappedClearance.length;
+      // Merge: fresh first (higher priority), then clearance, maintaining score order
+      items = [...freshItems.slice(0, freshNeeded), ...cappedClearance];
+      // Re-sort by score descending so tier bucketing stays correct
+      items.sort((a, b) => b.score - a.score);
+    }
+
+    return items.slice(0, kitSize);
+  }, [generated, aiItems, kitSize, weightMin, weightMax, clearancePct, metalWtMax, selectedSegment, selectedCategory]);
+
+  /* ── Available categories from scored items ── */
+  const availableCategories = useMemo(() => {
+    if (aiItems.length === 0) return [];
+    const cats = new Set(aiItems.map((i) => i.category).filter(Boolean));
+    return Array.from(cats).sort();
+  }, [aiItems]);
+
+  /* ── Section layout: Best Matches, Clearance, Segment Clusters ── */
+  const sections = useMemo(() => {
+    // 1. BEST MATCHES: top-1 item per product segment, score >= 75
+    const segmentBest = new Map<string, AssortSuggestion>();
+    for (const item of suggestions) {
+      const seg = getSegmentFromStyle(item.styleNo, item.cat);
+      const existing = segmentBest.get(seg);
+      if (!existing || item.score > existing.score) {
+        segmentBest.set(seg, item);
+      }
+    }
+    const bestMatchesBase = Array.from(segmentBest.values())
+      .filter(i => i.score >= 75)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+
+    // Build a lookup: pairRoot → all suggestions with that root
+    const rootToItems = new Map<string, AssortSuggestion[]>();
+    for (const item of suggestions) {
+      const root = pairRoot(item.styleNo);
+      if (root) {
+        if (!rootToItems.has(root)) rootToItems.set(root, []);
+        rootToItems.get(root)!.push(item);
+      }
+    }
+
+    // Pull set partners into Best Matches
+    const bestIds = new Set(bestMatchesBase.map(i => i.jc));
+    const bestMatches = [...bestMatchesBase];
+    for (const item of bestMatchesBase) {
+      const root = pairRoot(item.styleNo);
+      if (!root) continue;
+      const partners = rootToItems.get(root);
+      if (!partners) continue;
+      for (const p of partners) {
+        if (!bestIds.has(p.jc)) {
+          bestMatches.push(p);
+          bestIds.add(p.jc);
+        }
+      }
+    }
+
+    // 2. CLEARANCE: aged items excluding best matches
+    const clearanceBase = suggestions
+      .filter(i => !bestIds.has(i.jc) && isClearance(i))
+      .sort((a, b) => b.score - a.score);
+
+    // Pull set partners into Clearance
+    const clearanceIds = new Set(clearanceBase.map(i => i.jc));
+    const clearanceItems = [...clearanceBase];
+    for (const item of clearanceBase) {
+      const root = pairRoot(item.styleNo);
+      if (!root) continue;
+      const partners = rootToItems.get(root);
+      if (!partners) continue;
+      for (const p of partners) {
+        if (!bestIds.has(p.jc) && !clearanceIds.has(p.jc)) {
+          clearanceItems.push(p);
+          clearanceIds.add(p.jc);
+        }
+      }
+    }
+    clearanceItems.sort((a, b) => b.score - a.score);
+
+    // 3. SEGMENT CLUSTERS: remaining items grouped by product segment
+    const usedIds = new Set(Array.from(bestIds).concat(Array.from(clearanceIds)));
+    const remaining = suggestions.filter(i => !usedIds.has(i.jc));
+
+    const segGroups = new Map<string, AssortSuggestion[]>();
+    for (const item of remaining) {
+      const seg = getSegmentFromStyle(item.styleNo, item.cat);
+      if (!segGroups.has(seg)) segGroups.set(seg, []);
+      segGroups.get(seg)!.push(item);
+    }
+    Array.from(segGroups.values()).forEach(items => {
+      items.sort((a, b) => b.score - a.score);
+    });
+    const segments: [string, AssortSuggestion[]][] = Array.from(segGroups.entries())
+      .sort((a, b) => b[1].length - a[1].length);
+
+    return { bestMatches, clearanceItems, segments };
   }, [suggestions]);
 
   /* ── Decision stats ── */
@@ -214,7 +343,7 @@ export default function AssortmentPlanner() {
   }, [acceptedItems]);
 
   const deadStockCleared = useMemo(() => {
-    return acceptedItems.filter((i) => i.ageTag === "Dead Stock").length;
+    return acceptedItems.filter((i) => i.ageTag === "Slow Moving" || i.ageTag === "Ageing" || i.ageTag === "Non-Moving").length;
   }, [acceptedItems]);
 
   /* ── Elapsed timer cleanup ── */
@@ -302,7 +431,7 @@ export default function AssortmentPlanner() {
       tagPrice: item.tagPrice,
       gp: item.gp,
       ageingDays: item.ageingDays,
-      ageingTag: item.ageTag as "Fresh" | "Watch" | "Slow" | "Dead Stock",
+      ageingTag: item.ageTag as "Fresh" | "Active" | "Moderate" | "Slow Moving" | "Ageing" | "Non-Moving",
       perfTag: (item.perfTag || "Average") as "Top Seller" | "Fast Moving" | "Average" | "Slow",
       grossWt: item.grossWt,
       pureWt: item.pureWt || 0,
@@ -414,72 +543,127 @@ export default function AssortmentPlanner() {
       const root = pairRoot(item.styleNo);
       const siblings = root ? roots.get(root) : null;
       if (siblings && siblings.length >= 2) {
-        // Necklace first, earring second
+        // Necklace/choker first, earring second
         const sorted = [...siblings].sort((a, b) => {
           const aIsEarring = isEarringHalf(a.styleNo) ? 1 : 0;
           const bIsEarring = isEarringHalf(b.styleNo) ? 1 : 0;
           return aIsEarring - bIsEarring;
         });
-        groups.push({ type: "set", items: sorted });
+        // Unify score: all items in a set get the highest score
+        const maxScore = Math.max(...sorted.map((s) => s.score));
+        const unified = sorted.map((s) => ({ ...s, score: maxScore }));
+        groups.push({ type: "set", items: unified });
         for (const s of sorted) seen.add(s.jc);
       } else {
-        groups.push({ type: "single", items: [item] });
+        groups.push({ type: "single", items: [item], standaloneFromSet: root !== null });
         seen.add(item.jc);
       }
     }
     return groups;
   }
 
-  function renderTierSection(tierKey: "MUST INCLUDE" | "RECOMMENDED" | "OPTIONAL", items: AssortSuggestion[]) {
-    if (items.length === 0) return null;
-    const cfg = TIER_CONFIG[tierKey];
+  function renderGroupedGrid(items: AssortSuggestion[], accent: string) {
     const groups = groupBySet(items);
-    const accent = tierKey === "MUST INCLUDE" ? "#8B1A1A" : tierKey === "RECOMMENDED" ? "#1A56CC" : "#555";
+    return (
+      <div className="grid gap-3 py-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(185px, 1fr))" }}>
+        {groups.map((group, gi) => {
+          if (group.type === "set") {
+            return (
+              <div
+                key={`set-${gi}`}
+                className="relative flex gap-2 p-2 rounded-lg"
+                style={{ gridColumn: "span 2", border: `1.5px dashed ${accent}`, background: `${accent}0A`, marginBottom: 4 }}
+              >
+                <div className="absolute -top-2.5 left-3.5 z-10 text-white font-mono text-[9px] font-bold tracking-[1.2px] px-2 py-0.5 rounded" style={{ background: accent }}>
+                  SET
+                </div>
+                {group.items.map((item) => (
+                  <div key={item.jc} className="flex-1 min-w-0">{renderCard(item)}</div>
+                ))}
+              </div>
+            );
+          }
+          if (group.standaloneFromSet) {
+            return (
+              <div key={`solo-${gi}`} className="relative">
+                <div
+                  className="absolute -top-2 -left-1.5 z-10 text-white font-mono text-[8px] font-bold w-[18px] h-[18px] rounded-full flex items-center justify-center"
+                  style={{ background: accent }}
+                  title="Part of a set \u2014 only this piece is in stock"
+                >
+                  S
+                </div>
+                {renderCard(group.items[0])}
+              </div>
+            );
+          }
+          return renderCard(group.items[0]);
+        })}
+      </div>
+    );
+  }
+
+  function renderBestMatches(items: AssortSuggestion[]) {
+    const maxScore = Math.max(...items.map(i => i.score));
     return (
       <div className="mb-5">
-        {/* Tier header */}
-        <div className={cn(
-          "flex items-center gap-2.5 px-3.5 py-2.5 rounded-t-md",
-          "font-mono text-[10px] tracking-[1.5px] font-medium",
-          cfg.cls,
-        )}>
-          <span>{cfg.label}</span>
-          <span className="font-normal opacity-80 text-[11px] ml-1">({items.length} items)</span>
-          <span className="ml-auto text-[10px] font-normal opacity-75 hidden md:inline">{cfg.sub}</span>
+        <div
+          className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-t-md font-mono text-[10px] tracking-[1.5px] font-medium text-[#6B5314]"
+          style={{ background: "linear-gradient(90deg, #FEF6D9, #FDFAF4)", borderLeft: "3px solid #C9A84C" }}
+        >
+          <span>{"\uD83C\uDFC6"} BEST MATCHES</span>
+          <span className="font-normal opacity-80 text-[11px] ml-1">
+            Top match in {items.length} segments {"\u00B7"} highest score {maxScore}/100
+          </span>
         </div>
-        {/* Card grid with set grouping */}
-        <div className="grid gap-3 py-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(185px, 1fr))" }}>
-          {groups.map((group, gi) => {
-            if (group.type === "set") {
-              return (
-                <div
-                  key={`set-${gi}`}
-                  className="relative flex gap-2 p-2 rounded-lg"
-                  style={{
-                    gridColumn: "span 2",
-                    border: `1.5px dashed ${accent}`,
-                    background: `${accent}0A`,
-                    marginBottom: 4,
-                  }}
-                >
-                  {/* SET badge */}
-                  <div
-                    className="absolute -top-2.5 left-3.5 z-10 text-white font-mono text-[9px] font-bold tracking-[1.2px] px-2 py-0.5 rounded"
-                    style={{ background: accent }}
-                  >
-                    SET
-                  </div>
-                  {group.items.map((item) => (
-                    <div key={item.jc} className="flex-1 min-w-0">
-                      {renderCard(item)}
-                    </div>
-                  ))}
-                </div>
-              );
-            }
-            return renderCard(group.items[0]);
-          })}
+        {renderGroupedGrid(items, "#C9A84C")}
+      </div>
+    );
+  }
+
+  function renderClearance(items: AssortSuggestion[]) {
+    return (
+      <div className="mb-5">
+        <div
+          className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-t-md font-mono text-[10px] tracking-[1.5px] font-medium text-[#8B1A1A]"
+          style={{ background: "#FDEAEA", borderLeft: "3px solid #A63C2A" }}
+        >
+          <span>{"\uD83D\uDD34"} CLEARANCE {"\u2014"} HIGH PRIORITY</span>
+          <span className="font-normal opacity-80 text-[11px] ml-1">
+            {items.length} items {"\u00B7"} Aged stock to move first
+          </span>
         </div>
+        {renderGroupedGrid(items, "#A63C2A")}
+      </div>
+    );
+  }
+
+  function renderSegmentCluster(segName: string, items: AssortSuggestion[]) {
+    const catCountMap = new Map<string, number>();
+    for (const item of items) {
+      const cat = item.cat || "Other";
+      catCountMap.set(cat, (catCountMap.get(cat) || 0) + 1);
+    }
+    const catCounts = Array.from(catCountMap.entries()).sort((a, b) => b[1] - a[1]);
+
+    return (
+      <div key={segName} className="mb-5">
+        <div className="px-3.5 py-2.5 rounded-t-md" style={{ background: "#F5F1E8", borderLeft: "3px solid #C9A84C" }}>
+          <div className="flex items-center gap-2.5">
+            <span className="text-[17px] font-bold text-[#1A1814]">{"\uD83D\uDC8E"} {segName}</span>
+            <span className="font-mono text-[10px] tracking-[1.5px] text-[#6B6458] font-medium">
+              {items.length} items
+            </span>
+          </div>
+          <span className="inline-flex gap-1 flex-wrap mt-1">
+            {catCounts.map(([cat, count]) => (
+              <span key={cat} className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-[rgba(201,168,76,0.1)] text-[#6B5314]">
+                {cat} {"\u00D7"}{count}
+              </span>
+            ))}
+          </span>
+        </div>
+        {renderGroupedGrid(items, "#C9A84C")}
       </div>
     );
   }
@@ -530,6 +714,11 @@ export default function AssortmentPlanner() {
             <span className="bg-[rgba(74,124,89,0.45)] text-white text-[8px] font-medium px-1.5 py-0.5 rounded-full backdrop-blur-sm">
               {score100}% Match
             </span>
+            {(item.ageTag === "Slow Moving" || item.ageTag === "Ageing" || item.ageTag === "Non-Moving" || item.ageTag === "Slow" || item.ageTag === "Dead Stock" || item.ageingDays > 90) && (
+              <span className="bg-[rgba(166,60,42,0.85)] text-white text-[8px] font-bold w-[18px] h-[18px] rounded-full flex items-center justify-center backdrop-blur-sm" title="Clearance Stock">
+                C
+              </span>
+            )}
           </div>
 
           {/* Score breakdown tooltip — top-left */}
@@ -560,20 +749,20 @@ export default function AssortmentPlanner() {
           </div>
         </div>
 
-        {/* Recommended For — client strip matching live .clientStrip */}
-        {selectedClient && (
+        {/* Recommended For — per-item target client from AI scoring */}
+        {item.targetClient && (
           <div
             className="flex items-center gap-2 px-[11px] py-[7px] shrink-0"
             style={{ background: "#FEF9EE", borderBottom: "2px solid var(--gold, #C9A84C)", minHeight: 44 }}
-            title={selectedClient}
+            title={item.targetClient}
           >
             <div className="w-[26px] h-[26px] rounded-full bg-[#C9A84C] flex items-center justify-center text-[10px] font-bold text-white shrink-0">
-              {selectedClient.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase()}
+              {item.targetClient.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase()}
             </div>
             <div className="min-w-0">
               <div className="font-mono text-[7.5px] tracking-[1.5px] text-[#8B6914] uppercase leading-none">Recommended for</div>
               <div className="text-[12px] font-bold text-[#1A1814] leading-tight mt-px truncate">
-                {selectedClient.length > 28 ? selectedClient.substring(0, 26) + "\u2026" : selectedClient}
+                {item.targetClient.length > 28 ? item.targetClient.substring(0, 26) + "\u2026" : item.targetClient}
               </div>
             </div>
           </div>
@@ -635,6 +824,15 @@ export default function AssortmentPlanner() {
                 </div>
               ) : <div />}
             </div>
+            {/* Selling Price — visible only when gold rate is set */}
+            {localGoldPrice > 0 && item.pureWt != null && item.pureWt > 0 && (
+              <div className="bg-[#F0FAF3] border border-[#B8D4BE] rounded-[5px] px-2 py-[5px] mb-[7px]">
+                <div className="font-mono text-[7px] tracking-[1.5px] text-[#4A7C59] uppercase mb-0.5">Selling Price</div>
+                <div className="text-[15px] font-bold text-[#4A7C59] leading-none" style={{ fontVariantNumeric: "tabular-nums" }}>
+                  {fmt(Math.round(item.tagPrice / 2 + localGoldPrice * item.pureWt!))}
+                </div>
+              </div>
+            )}
           </div>
           {/* Variable content — pushes score bar to bottom */}
           <div className="flex-1 flex flex-col justify-end">
@@ -749,7 +947,7 @@ export default function AssortmentPlanner() {
           <div className="flex gap-2.5 items-center flex-wrap">
             <select
               value={selectedBdm}
-              onChange={(e) => { setSelectedBdm(e.target.value); setSelectedState(""); setSelectedClient(""); }}
+              onChange={(e) => { setSelectedBdm(e.target.value); setSelectedState(""); setSelectedClient(""); resetResults(); }}
               className="min-w-[180px] px-2.5 py-1.5 border border-[#D4C9A8] rounded bg-white text-[12.5px] text-[#1A1814] focus:border-[#C9A84C] outline-none"
             >
               <option value="">{"\u2014"} Select BDM {"\u2014"}</option>
@@ -759,7 +957,7 @@ export default function AssortmentPlanner() {
             </select>
             <select
               value={selectedState}
-              onChange={(e) => setSelectedState(e.target.value)}
+              onChange={(e) => { setSelectedState(e.target.value); setSelectedClient(""); resetResults(); }}
               disabled={!selectedBdm}
               className="min-w-[200px] px-2.5 py-1.5 border border-[#D4C9A8] rounded bg-white text-[12.5px] text-[#1A1814] focus:border-[#C9A84C] outline-none disabled:opacity-50"
             >
@@ -770,7 +968,7 @@ export default function AssortmentPlanner() {
             </select>
             <select
               value={selectedClient}
-              onChange={(e) => setSelectedClient(e.target.value)}
+              onChange={(e) => { setSelectedClient(e.target.value); resetResults(); }}
               disabled={!selectedBdm}
               className="min-w-[200px] px-2.5 py-1.5 border border-[#D4C9A8] rounded bg-white text-[12.5px] text-[#1A1814] focus:border-[#C9A84C] outline-none disabled:opacity-50"
             >
@@ -789,7 +987,7 @@ export default function AssortmentPlanner() {
           <div className="flex gap-2.5 items-center flex-wrap">
             <select
               value={selectedClient}
-              onChange={(e) => setSelectedClient(e.target.value)}
+              onChange={(e) => { setSelectedClient(e.target.value); resetResults(); }}
               className="min-w-[200px] px-2.5 py-1.5 border border-[#D4C9A8] rounded bg-white text-[12.5px] text-[#1A1814] focus:border-[#C9A84C] outline-none"
             >
               <option value="">{"\u2014"} Select Client {"\u2014"}</option>
@@ -818,6 +1016,30 @@ export default function AssortmentPlanner() {
           </div>
         )}
 
+        {/* Product Segment filter */}
+        <select
+          value={selectedSegment}
+          onChange={(e) => setSelectedSegment(e.target.value)}
+          className="px-2.5 py-1.5 border border-[#D4C9A8] rounded bg-white text-[12.5px] text-[#1A1814] focus:border-[#C9A84C] outline-none"
+        >
+          <option value="">All Segments</option>
+          {PRODUCT_SEGMENTS.map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+
+        {/* Category filter */}
+        <select
+          value={selectedCategory}
+          onChange={(e) => setSelectedCategory(e.target.value)}
+          className="px-2.5 py-1.5 border border-[#D4C9A8] rounded bg-white text-[12.5px] text-[#1A1814] focus:border-[#C9A84C] outline-none"
+        >
+          <option value="">All Categories</option>
+          {availableCategories.map((c) => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
+
         {/* Right-side sliders + weight — matching live controls */}
         <div className="flex gap-3.5 items-center flex-wrap ml-auto">
           <div className="text-[12px] text-[#3D3830]">
@@ -844,24 +1066,17 @@ export default function AssortmentPlanner() {
               style={{ accentColor: "#C9A84C" }}
             />
           </div>
-          {/* Weight filter — DM Mono matching live */}
-          <div className="flex items-center gap-1.5 px-2.5 py-0.5 border border-[#D4C9A8] bg-[#F5F1E8] rounded"
-            title="Filter by Pure Weight (grams)">
-            <span className="font-mono text-[9px] tracking-wider text-[#6B6458]">{"\u2696"} WT (g)</span>
+          <div className="text-[12px] text-[#3D3830]">
+            Metal: <strong>{"\u2264"}{metalWtMax}g</strong>{" "}
             <input
-              type="number"
-              placeholder="Min"
-              value={weightMin}
-              onChange={(e) => setWeightMin(e.target.value)}
-              className="w-[52px] px-1.5 py-0.5 border border-[#D4C9A8] rounded font-mono text-[11px] bg-white focus:border-[#C9A84C] outline-none"
-            />
-            <span className="text-[10px] text-[#6B6458]">{"\u2013"}</span>
-            <input
-              type="number"
-              placeholder="Max"
-              value={weightMax}
-              onChange={(e) => setWeightMax(e.target.value)}
-              className="w-[52px] px-1.5 py-0.5 border border-[#D4C9A8] rounded font-mono text-[11px] bg-white focus:border-[#C9A84C] outline-none"
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={metalWtMax}
+              onChange={(e) => setMetalWtMax(Number(e.target.value))}
+              className="w-[80px] align-middle"
+              style={{ accentColor: "#C9A84C" }}
             />
           </div>
         </div>
@@ -938,12 +1153,14 @@ export default function AssortmentPlanner() {
         </div>
       )}
 
-      {/* RESULTS — tier sections */}
+      {/* RESULTS — Best Matches + Clearance + Segment Clusters */}
       {generated && !isScoring && (
         <div className="bg-white border border-[#D4C9A8] border-t-0 min-h-[400px] p-5 pb-4">
-          {renderTierSection("MUST INCLUDE", tiers.must)}
-          {renderTierSection("RECOMMENDED", tiers.recommended)}
-          {renderTierSection("OPTIONAL", tiers.optional)}
+          {sections.bestMatches.length > 0 && renderBestMatches(sections.bestMatches)}
+          {sections.clearanceItems.length > 0 && renderClearance(sections.clearanceItems)}
+          {sections.segments.map(([segName, items]) =>
+            renderSegmentCluster(segName, items)
+          )}
 
           {suggestions.length === 0 && (
             <div className="text-center py-12 text-[#6B6458] text-[14px]">
