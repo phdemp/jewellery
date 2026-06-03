@@ -41,6 +41,7 @@ import {
   startDesignImageImport,
   getDesignImageImportStatus,
   THEME_CODES,
+  THEME_CODE_LABELS,
   REFERENCE_SEGMENTS,
   REFERENCE_SEGMENT_CATEGORIES,
   type ReferenceImage,
@@ -246,7 +247,7 @@ export default function References() {
 
   const getSegmentLabel = (ref: ReferenceImage) => {
     if (ref.productSegment) return ref.category ? `${ref.productSegment} › ${ref.category}` : ref.productSegment;
-    if (ref.themeCode) return ref.themeCode;
+    if (ref.themeCode) return THEME_CODE_LABELS[ref.themeCode] || ref.themeCode;
     return "Untagged";
   };
 
@@ -690,7 +691,7 @@ export default function References() {
                         >
                           {ref.productSegment
                             ? (ref.category ? `${ref.productSegment} · ${ref.category}` : ref.productSegment)
-                            : ref.themeCode}
+                            : (THEME_CODE_LABELS[ref.themeCode || ""] || ref.themeCode)}
                         </Badge>
                       )}
                       {ref.analysis?.pieceType && (
@@ -725,7 +726,7 @@ export default function References() {
                     {selectedReference.filename}
                     {(selectedReference.productSegment || selectedReference.themeCode) && (
                       <Badge variant="outline">
-                        {selectedReference.productSegment || selectedReference.themeCode}
+                        {selectedReference.productSegment || THEME_CODE_LABELS[selectedReference.themeCode || ""] || selectedReference.themeCode}
                       </Badge>
                     )}
                   </DialogTitle>

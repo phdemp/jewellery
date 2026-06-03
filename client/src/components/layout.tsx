@@ -98,6 +98,14 @@ export function Layout({ children }: { children: ReactNode }) {
                 Intelligence Platform
               </span>
             </Link>
+            <Link href="/quality">
+              <span
+                className={`cursor-pointer transition-colors ${location === "/quality" ? "text-primary" : "text-muted-foreground hover:text-primary"}`}
+                data-testid="nav-quality"
+              >
+                Quality
+              </span>
+            </Link>
             <Link href="/feedback">
               <span
                 className={`cursor-pointer transition-colors ${location === "/feedback" ? "text-primary" : "text-muted-foreground hover:text-primary"}`}

@@ -37,6 +37,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { id: "inventory", label: "Inventory", icon: <Package className="w-4 h-4" /> },
       { id: "skuintel", label: "SKU Intelligence", icon: <BarChart3 className="w-4 h-4" />, badge: "427" },
+      { id: "inventory_suggestions", label: "Suggestions", icon: <Lightbulb className="w-4 h-4" /> },
     ],
   },
   {
@@ -73,37 +74,43 @@ function Sidebar() {
       style={{
         width: 220,
         backgroundColor: "#1A1814",
-        zIndex: 50,
+        zIndex: 100,
       }}
     >
       {/* Brand header */}
-      <div className="px-5 pt-5 pb-4 border-b border-white/10">
+      <div style={{ padding: "24px 20px 18px", borderBottom: "1px solid rgba(201,168,76,0.2)" }}>
         <h1
-          className="text-white text-lg tracking-wide"
-          style={{ fontFamily: "'Cormorant Garamond', serif" }}
+          className="uppercase"
+          style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: 18, fontWeight: 500, color: "#E8D5A3", letterSpacing: 2 }}
         >
           Raniwala 1881
         </h1>
         <p
-          className="text-[10px] tracking-[0.2em] mt-0.5"
           style={{
             fontFamily: "'DM Mono', monospace",
-            color: "#C9A96E",
+            fontSize: "8.5px",
+            color: "#6B6458",
+            letterSpacing: 2,
+            textTransform: "uppercase",
+            marginTop: 3,
           }}
         >
-          INTELLIGENCE PLATFORM
+          Intelligence Platform
         </p>
       </div>
 
       {/* Nav sections */}
-      <nav className="flex-1 overflow-y-auto py-3 px-2">
+      <nav className="flex-1 overflow-y-auto" style={{ padding: "12px 0" }}>
         {NAV_SECTIONS.map((section) => (
-          <div key={section.title} className="mb-4">
+          <div key={section.title}>
             <p
-              className="px-3 mb-1.5 text-[10px] tracking-[0.15em]"
               style={{
                 fontFamily: "'DM Mono', monospace",
-                color: "rgba(255,255,255,0.35)",
+                fontSize: "8.5px",
+                color: "rgba(201,168,76,0.4)",
+                letterSpacing: "2.5px",
+                textTransform: "uppercase",
+                padding: "12px 20px 5px",
               }}
             >
               {section.title}
@@ -114,29 +121,54 @@ function Sidebar() {
                 <button
                   key={item.id}
                   onClick={() => setActivePage(item.id)}
-                  className={cn(
-                    "w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-[13px] transition-colors",
-                    "hover:bg-white/5",
-                    isActive
-                      ? "text-[#C9A96E] bg-[#C9A96E]/8"
-                      : "text-white/60"
-                  )}
+                  className="w-full flex items-center relative"
                   style={{
-                    borderLeft: isActive ? "3px solid #C9A96E" : "3px solid transparent",
-                    fontFamily: "'Inter', sans-serif",
+                    gap: 9,
+                    padding: "9px 20px",
+                    color: isActive ? "#C9A84C" : "rgba(250,247,240,0.5)",
+                    background: isActive ? "rgba(201,168,76,0.1)" : "transparent",
+                    fontFamily: "'Jost', sans-serif",
+                    fontSize: "12.5px",
+                    fontWeight: 300,
+                    letterSpacing: "0.3px",
+                    transition: "all 0.18s",
+                    cursor: "pointer",
+                    border: "none",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isActive) {
+                      e.currentTarget.style.color = "#E8D5A3";
+                      e.currentTarget.style.background = "rgba(201,168,76,0.06)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isActive) {
+                      e.currentTarget.style.color = "rgba(250,247,240,0.5)";
+                      e.currentTarget.style.background = "transparent";
+                    }
                   }}
                 >
-                  <span className={cn(isActive ? "text-[#C9A96E]" : "text-white/40")}>
+                  {isActive && (
+                    <span className="absolute left-0 top-0 bottom-0" style={{ width: 3, background: "#C9A84C" }} />
+                  )}
+                  <span style={{ width: 15, height: 15, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
                     {item.icon}
                   </span>
                   <span className="flex-1 text-left">{item.label}</span>
                   {item.badge && (
-                    <Badge
-                      variant="secondary"
-                      className="text-[10px] px-1.5 py-0 h-4 bg-white/10 text-white/50 border-0"
+                    <span
+                      style={{
+                        background: "#A63C2A",
+                        color: "white",
+                        borderRadius: 10,
+                        fontSize: "9px",
+                        padding: "1px 5px",
+                        fontWeight: 500,
+                        marginLeft: "auto",
+                      }}
                     >
                       {item.badge}
-                    </Badge>
+                    </span>
                   )}
                 </button>
               );
@@ -146,12 +178,13 @@ function Sidebar() {
       </nav>
 
       {/* Sidebar footer */}
-      <div className="px-4 py-3 border-t border-white/10">
+      <div style={{ padding: "14px 20px", borderTop: "1px solid rgba(201,168,76,0.1)" }}>
         <p
-          className="text-[10px] tracking-wide"
           style={{
             fontFamily: "'DM Mono', monospace",
-            color: "rgba(255,255,255,0.3)",
+            fontSize: "8.5px",
+            color: "rgba(107,100,88,0.5)",
+            letterSpacing: "1.5px",
           }}
         >
           FY 2025-26 &middot; LIVE DATA
@@ -187,17 +220,18 @@ function Topbar() {
 
   return (
     <header
-      className="sticky top-0 flex items-center justify-between px-6 border-b bg-white"
+      className="sticky top-0 flex items-center justify-between bg-white"
       style={{
         height: 56,
-        zIndex: 40,
-        borderColor: "#E8E0D0",
+        zIndex: 50,
+        padding: "0 28px",
+        borderBottom: "1px solid #D4C9A8",
       }}
     >
       {/* Left: page title */}
       <h2
         className="text-xl text-[#1A1814]"
-        style={{ fontFamily: "'Cormorant Garamond', serif", fontWeight: 600 }}
+        style={{ fontFamily: "'Cormorant Garamond', serif", fontWeight: 500 }}
       >
         {title}
       </h2>
@@ -216,7 +250,7 @@ function Topbar() {
           size="sm"
           disabled={syncMutation.isPending}
           onClick={() => syncMutation.mutate()}
-          className="h-8 text-xs border-[#E8E0D0] text-[#1A1814]/60 hover:bg-[#FAF7F0]"
+          className="h-8 text-xs border-[#D4C9A8] text-[#1A1814]/60 hover:bg-[#FAF7F0]"
         >
           <RefreshCw className={cn("w-3.5 h-3.5 mr-1.5", syncMutation.isPending && "animate-spin")} />
           {syncMutation.isPending ? "Syncing..." : "Sync Now"}
@@ -225,7 +259,7 @@ function Topbar() {
         <Button
           variant="outline"
           size="sm"
-          className="h-8 text-xs border-[#E8E0D0] text-[#1A1814]/60 hover:bg-[#FAF7F0]"
+          className="h-8 text-xs border-[#D4C9A8] text-[#1A1814]/60 hover:bg-[#FAF7F0]"
         >
           <Download className="w-3.5 h-3.5 mr-1.5" />
           Export CSV
@@ -234,13 +268,13 @@ function Topbar() {
         <Button
           variant="outline"
           size="sm"
-          className="h-8 text-xs border-[#E8E0D0] text-[#1A1814]/60 hover:bg-[#FAF7F0] relative"
+          className="h-8 text-xs border-[#D4C9A8] text-[#1A1814]/60 hover:bg-[#FAF7F0] relative"
         >
           <ScrollText className="w-3.5 h-3.5 mr-1.5" />
           Audit Trail
           {auditLog.length > 0 && (
             <Badge
-              className="absolute -top-1.5 -right-1.5 h-4 min-w-4 px-1 text-[9px] bg-[#C9A96E] text-white border-0"
+              className="absolute -top-1.5 -right-1.5 h-4 min-w-4 px-1 text-[9px] bg-[#C9A84C] text-white border-0"
             >
               {auditLog.length}
             </Badge>
@@ -249,7 +283,7 @@ function Topbar() {
 
         <Button
           size="sm"
-          className="h-8 text-xs bg-[#C9A96E] hover:bg-[#B8964E] text-white"
+          className="h-8 text-xs bg-[#C9A84C] hover:bg-[#8B6914] text-white"
         >
           <Plus className="w-3.5 h-3.5 mr-1.5" />
           New Dispatch

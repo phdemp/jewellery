@@ -388,7 +388,7 @@ export default function DispatchPlanner() {
             <label className="text-[11px] font-medium text-[#6B6458] uppercase tracking-wider">
               &nbsp;
             </label>
-            <button className="block px-4 py-1.5 bg-[#C9A84C] text-white text-[13px] font-medium rounded hover:bg-[#B8972F] transition-colors">
+            <button className="block px-4 py-1.5 bg-[#C9A84C] text-white text-[13px] font-medium rounded hover:bg-[#8B6914] transition-colors">
               Detect Gaps
             </button>
           </div>
@@ -398,7 +398,7 @@ export default function DispatchPlanner() {
         <div className="border border-[#D4C9A8] rounded-lg overflow-hidden">
           <table className="w-full text-[13px]">
             <thead>
-              <tr className="bg-[#FAF8F5] border-b border-[#D4C9A8]">
+              <tr className="bg-[#F5F1E8] border-b border-[#D4C9A8]">
                 <th className="text-left px-3 py-2 font-medium text-[#6B6458]">
                   Category
                 </th>
@@ -423,7 +423,7 @@ export default function DispatchPlanner() {
               {transferSuggestions.map((t, idx) => (
                 <tr
                   key={idx}
-                  className="border-b border-[#F0ECE4] hover:bg-[#FAF8F5]"
+                  className="border-b border-[#EDE7D8] hover:bg-[#F5F1E8]"
                 >
                   <td className="px-3 py-2 font-medium text-[#2C2520]">
                     {t.category}
@@ -657,6 +657,7 @@ export default function DispatchPlanner() {
 
   return (
     <div className="space-y-5">
+      <div style={{ height: 2, background: "linear-gradient(90deg, #C9A84C, transparent)", marginBottom: 20, borderRadius: 1 }} />
       {/* Tab Selector */}
       <div className="flex items-center gap-0">
         {tabs.map((tab, i) => (
@@ -664,13 +665,13 @@ export default function DispatchPlanner() {
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
             className={cn(
-              "px-5 py-2 text-[13px] font-medium border transition-colors",
-              i === 0 && "rounded-l-lg",
-              i === tabs.length - 1 && "rounded-r-lg",
+              "px-5 py-[10px] text-[13px] font-medium border transition-colors",
+              i === 0 && "rounded-l-[4px]",
+              i === tabs.length - 1 && "rounded-r-[4px]",
               i > 0 && "border-l-0",
               activeTab === tab.key
-                ? "bg-[#C9A84C] text-white border-[#C9A84C]"
-                : "bg-white text-[#6B6458] border-[#D4C9A8] hover:bg-[#FAF8F5]",
+                ? "bg-[#C9A84C] text-[#1A1814] border-[#C9A84C]"
+                : "bg-white text-[#6B6458] border-[#D4C9A8] hover:bg-[#F5F1E8]",
             )}
           >
             {tab.label}

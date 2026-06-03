@@ -31,7 +31,7 @@ type TabId = "top-sellers" | "dead-stock" | "assortment-mix";
 
 const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
   { id: "top-sellers", label: "Top Sellers", icon: <Trophy className="w-3.5 h-3.5" /> },
-  { id: "dead-stock", label: "Dead Stock", icon: <AlertCircle className="w-3.5 h-3.5" /> },
+  { id: "dead-stock", label: "Non-Moving", icon: <AlertCircle className="w-3.5 h-3.5" /> },
   { id: "assortment-mix", label: "Assortment Mix", icon: <PieChart className="w-3.5 h-3.5" /> },
 ];
 
@@ -56,6 +56,7 @@ export default function SkuIntelPage() {
 
   return (
     <div className="space-y-5">
+      <div style={{ height: 2, background: "linear-gradient(90deg, #C9A84C, transparent)", marginBottom: 20, borderRadius: 1 }} />
       {/* Page header */}
       <div>
         <h2
@@ -75,7 +76,7 @@ export default function SkuIntelPage() {
       {/* Tab bar */}
       <div
         className="flex border-b"
-        style={{ borderColor: "#E8E0D0" }}
+        style={{ borderColor: "#D4C9A8" }}
       >
         {TABS.map((tab) => (
           <button
@@ -87,7 +88,7 @@ export default function SkuIntelPage() {
                 ? "border-[#C9A84C] text-[#8B6914] font-medium"
                 : "border-transparent text-[#1A1814]/40 hover:text-[#1A1814]/60"
             )}
-            style={{ fontFamily: "'Inter', sans-serif" }}
+            style={{ fontFamily: "'Jost', sans-serif" }}
           >
             <span className={cn(activeTab === tab.id ? "text-[#C9A84C]" : "text-[#1A1814]/30")}>
               {tab.icon}
@@ -146,7 +147,7 @@ function TopSellersTab() {
     fontFamily: MONO,
     fontSize: "9.5px",
     letterSpacing: "1.5px",
-    color: "#8B8178",
+    color: "#6B6458",
     textTransform: "uppercase",
   };
 
@@ -166,7 +167,7 @@ function TopSellersTab() {
           </span>
           <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortKey)}>
             <SelectTrigger
-              className="h-8 w-[180px] text-xs border-[#E8E0D0] bg-[#FAF7F0]"
+              className="h-8 w-[180px] text-xs border-[#D4C9A8] bg-white"
               style={{ fontFamily: MONO, fontSize: "11px" }}
             >
               <SelectValue />
@@ -183,12 +184,12 @@ function TopSellersTab() {
       {/* Table */}
       <div
         className="rounded-lg border overflow-hidden"
-        style={{ borderColor: "#E8E0D0" }}
+        style={{ borderColor: "#D4C9A8" }}
       >
         <div className="overflow-x-auto">
-          <table className="w-full text-[12px]" style={{ fontFamily: "'Inter', sans-serif" }}>
+          <table className="w-full text-[12px]" style={{ fontFamily: "'Jost', sans-serif" }}>
             <thead>
-              <tr style={{ backgroundColor: "#F5F0E8" }}>
+              <tr style={{ backgroundColor: "#F5F1E8" }}>
                 <th className="px-3 py-2.5 text-left" style={THStyle}>Image</th>
                 <th className="px-3 py-2.5 text-center" style={THStyle}>Rank</th>
                 <th className="px-3 py-2.5 text-left" style={THStyle}>Style Code</th>
@@ -205,14 +206,14 @@ function TopSellersTab() {
                 const rank = idx + 1;
                 const rankColor =
                   rank === 1 ? "text-[#C9A84C]" :
-                  rank === 2 ? "text-[#8B8178]" :
+                  rank === 2 ? "text-[#6B6458]" :
                   rank === 3 ? "text-[#B87333]" :
                   "text-[#1A1814]/40";
 
                 return (
                   <tr
                     key={sku.styleCode}
-                    className="border-t border-[#E8E0D0]/60 transition-colors hover:bg-[#FAF7F0]"
+                    className="border-t border-[#EDE7D8] transition-colors hover:bg-[#F5F1E8]"
                     style={{ backgroundColor: "#FFFFFF" }}
                   >
                     <td className="px-3 py-2">
@@ -220,14 +221,14 @@ function TopSellersTab() {
                         <img
                           src={imgSrc}
                           alt={sku.styleCode}
-                          className="w-10 h-10 rounded object-cover border border-[#E8E0D0]"
+                          className="w-10 h-10 rounded object-cover border border-[#D4C9A8]"
                           loading="lazy"
                           onError={(e) => {
                             (e.target as HTMLImageElement).style.display = "none";
                           }}
                         />
                       ) : (
-                        <div className="w-10 h-10 rounded bg-[#F5F0E8] flex items-center justify-center">
+                        <div className="w-10 h-10 rounded bg-[#F5F1E8] flex items-center justify-center">
                           <span className="text-[9px] text-[#1A1814]/20" style={{ fontFamily: MONO }}>N/A</span>
                         </div>
                       )}
@@ -313,7 +314,7 @@ function DeadStockTab() {
     queryKey: ["stock-items-dead", page],
     queryFn: () => fetchStockItems({
       status: "On Hand",
-      ageingTag: "Dead Stock",
+      ageingTag: "Non-Moving",
       page,
       limit: DEAD_PER_PAGE,
       sortBy: "ageingDays",
@@ -333,7 +334,7 @@ function DeadStockTab() {
     fontFamily: MONO,
     fontSize: "9.5px",
     letterSpacing: "1.5px",
-    color: "#8B8178",
+    color: "#6B6458",
     textTransform: "uppercase",
   };
 
@@ -364,12 +365,12 @@ function DeadStockTab() {
       {/* Table */}
       <div
         className="rounded-lg border overflow-hidden"
-        style={{ borderColor: "#E8E0D0" }}
+        style={{ borderColor: "#D4C9A8" }}
       >
         <div className="overflow-x-auto">
-          <table className="w-full text-[12px]" style={{ fontFamily: "'Inter', sans-serif" }}>
+          <table className="w-full text-[12px]" style={{ fontFamily: "'Jost', sans-serif" }}>
             <thead>
-              <tr style={{ backgroundColor: "#F5F0E8" }}>
+              <tr style={{ backgroundColor: "#F5F1E8" }}>
                 <th className="px-3 py-2.5 text-left" style={THStyle}>Image</th>
                 <th className="px-3 py-2.5 text-left" style={THStyle}>Jewel Code</th>
                 <th className="px-3 py-2.5 text-left" style={THStyle}>Style No</th>
@@ -385,7 +386,7 @@ function DeadStockTab() {
               {items.map((item: LiveStockItem) => (
                   <tr
                     key={item.id}
-                    className="border-t border-[#E8E0D0]/60 transition-colors hover:bg-[#FAF7F0]"
+                    className="border-t border-[#EDE7D8] transition-colors hover:bg-[#F5F1E8]"
                     style={{ backgroundColor: "#FFFFFF" }}
                   >
                     <td className="px-3 py-2">
@@ -393,14 +394,14 @@ function DeadStockTab() {
                         <img
                           src={item.imageUrl}
                           alt={item.jewelCode}
-                          className="w-10 h-10 rounded object-cover border border-[#E8E0D0]"
+                          className="w-10 h-10 rounded object-cover border border-[#D4C9A8]"
                           loading="lazy"
                           onError={(e) => {
                             (e.target as HTMLImageElement).style.display = "none";
                           }}
                         />
                       ) : (
-                        <div className="w-10 h-10 rounded bg-[#F5F0E8] flex items-center justify-center">
+                        <div className="w-10 h-10 rounded bg-[#F5F1E8] flex items-center justify-center">
                           <span className="text-[9px] text-[#1A1814]/20" style={{ fontFamily: MONO }}>N/A</span>
                         </div>
                       )}
@@ -472,7 +473,7 @@ function DeadStockTab() {
               size="sm"
               disabled={page <= 1}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className="h-7 w-7 p-0 border-[#E8E0D0]"
+              className="h-7 w-7 p-0 border-[#D4C9A8]"
             >
               <ChevronLeft className="w-3.5 h-3.5" />
             </Button>
@@ -492,10 +493,10 @@ function DeadStockTab() {
                   size="sm"
                   onClick={() => setPage(pn as number)}
                   className={cn(
-                    "h-7 min-w-7 px-2 text-xs border-[#E8E0D0]",
+                    "h-7 min-w-7 px-2 text-xs border-[#D4C9A8]",
                     pn === page
-                      ? "bg-[#C9A84C] text-white hover:bg-[#B8964E] border-[#C9A84C]"
-                      : "hover:bg-[#FAF7F0]"
+                      ? "bg-[#C9A84C] text-[#1A1814] hover:bg-[#8B6914] border-[#C9A84C]"
+                      : "hover:bg-[#F5F1E8]"
                   )}
                   style={{ fontFamily: MONO }}
                 >
@@ -508,7 +509,7 @@ function DeadStockTab() {
               size="sm"
               disabled={page >= totalPages}
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              className="h-7 w-7 p-0 border-[#E8E0D0]"
+              className="h-7 w-7 p-0 border-[#D4C9A8]"
             >
               <ChevronRight className="w-3.5 h-3.5" />
             </Button>
@@ -624,7 +625,7 @@ function BarSection({ title, items }: BarSectionProps) {
   return (
     <div
       className="rounded-lg border p-4"
-      style={{ backgroundColor: "#FFFFFF", borderColor: "#E8E0D0" }}
+      style={{ backgroundColor: "#FFFFFF", borderColor: "#D4C9A8" }}
     >
       <h3
         className="text-base text-[#1A1814] mb-4"
@@ -648,9 +649,9 @@ function BarSection({ title, items }: BarSectionProps) {
               </div>
 
               {/* Bar */}
-              <div className="flex-1 h-7 bg-[#F5F0E8] rounded overflow-hidden relative">
+              <div className="flex-1 h-[7px] bg-[#EDE7D8] rounded-[4px] overflow-hidden relative">
                 <div
-                  className="h-full rounded transition-all duration-500"
+                  className="h-full rounded-[4px] transition-all duration-500"
                   style={{
                     width: `${Math.max(pct, 2)}%`,
                     background: "linear-gradient(90deg, #C9A84C, #E0C882)",
@@ -661,7 +662,7 @@ function BarSection({ title, items }: BarSectionProps) {
                   className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-medium"
                   style={{
                     fontFamily: MONO,
-                    color: pct > 15 ? "#5E4100" : "#8B8178",
+                    color: pct > 15 ? "#5E4100" : "#6B6458",
                   }}
                 >
                   {item.count.toLocaleString("en-IN")}

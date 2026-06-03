@@ -33,18 +33,21 @@ import {
   ChevronRight,
   Plus,
   Eye,
+  FileText,
 } from "lucide-react";
 
 // ---- Ageing tag computation from ageingDays ----
 
-const AGEING_OPTIONS = ["Fresh", "Watch", "Slow", "Dead Stock"] as const;
+const AGEING_OPTIONS = ["Fresh", "Active", "Moderate", "Slow Moving", "Ageing", "Non-Moving"] as const;
 const STATUS_OPTIONS = ["On Hand", "Memo"] as const;
 
 function getAgeingTag(days: number): string {
-  if (days <= 90) return "Fresh";
-  if (days <= 180) return "Watch";
-  if (days <= 365) return "Slow";
-  return "Dead Stock";
+  if (days <= 30) return "Fresh";
+  if (days <= 60) return "Active";
+  if (days <= 90) return "Moderate";
+  if (days <= 180) return "Slow Moving";
+  if (days <= 270) return "Ageing";
+  return "Non-Moving";
 }
 
 const MONO = "'DM Mono', monospace";
@@ -67,6 +70,7 @@ export default function InventoryPage() {
 
   // Detail modal
   const [selectedItem, setSelectedItem] = useState<LiveStockItem | null>(null);
+  const [memoOpen, setMemoOpen] = useState(false);
 
   // ---- Fetch summary for filter dropdown options ----
   const { data: summary } = useQuery({
@@ -153,6 +157,7 @@ export default function InventoryPage() {
 
   return (
     <div className="space-y-5">
+      <div style={{ height: 2, background: "linear-gradient(90deg, #C9A84C, transparent)", marginBottom: 20, borderRadius: 1 }} />
       {/* Page header */}
       <div className="flex items-center justify-between">
         <div>
@@ -170,21 +175,32 @@ export default function InventoryPage() {
             {hasActiveFilters ? " (filtered)" : ""}
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleExportCSV}
-          className="h-8 text-xs border-[#E8E0D0] text-[#1A1814]/60 hover:bg-[#FAF7F0]"
-        >
-          <Download className="w-3.5 h-3.5 mr-1.5" />
-          Export CSV
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setMemoOpen(true)}
+            className="h-8 text-xs border-[#D4C9A8] text-[#1A1814]/60 hover:bg-[#F5F1E8]"
+          >
+            <FileText className="w-3.5 h-3.5 mr-1.5" />
+            Memo Tracker
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportCSV}
+            className="h-8 text-xs border-[#D4C9A8] text-[#1A1814]/60 hover:bg-[#F5F1E8]"
+          >
+            <Download className="w-3.5 h-3.5 mr-1.5" />
+            Export CSV
+          </Button>
+        </div>
       </div>
 
       {/* Filter bar */}
       <div
         className="rounded-lg border p-3 flex flex-wrap items-center gap-2.5"
-        style={{ backgroundColor: "#FFFFFF", borderColor: "#E8E0D0" }}
+        style={{ backgroundColor: "#FFFFFF", borderColor: "#D4C9A8" }}
       >
         {/* Search */}
         <div className="relative w-52">
@@ -193,7 +209,7 @@ export default function InventoryPage() {
             value={search}
             onChange={(e) => handleFilterChange(setSearch)(e.target.value)}
             placeholder="Search jewel code, style..."
-            className="h-8 pl-8 text-xs border-[#E8E0D0] bg-[#FAF7F0] placeholder:text-[#1A1814]/30"
+            className="h-8 pl-8 text-xs border-[#D4C9A8] bg-white placeholder:text-[#1A1814]/30"
             style={{ fontFamily: MONO, fontSize: "11px" }}
           />
         </div>
@@ -201,7 +217,7 @@ export default function InventoryPage() {
         {/* Ageing */}
         <Select value={ageingFilter} onValueChange={handleFilterChange(setAgeingFilter)}>
           <SelectTrigger
-            className="h-8 w-[130px] text-xs border-[#E8E0D0] bg-[#FAF7F0]"
+            className="h-8 w-[130px] text-xs border-[#D4C9A8] bg-white"
             style={{ fontFamily: MONO, fontSize: "11px" }}
           >
             <SelectValue placeholder="Ageing" />
@@ -217,7 +233,7 @@ export default function InventoryPage() {
         {/* Category */}
         <Select value={categoryFilter} onValueChange={handleFilterChange(setCategoryFilter)}>
           <SelectTrigger
-            className="h-8 w-[150px] text-xs border-[#E8E0D0] bg-[#FAF7F0]"
+            className="h-8 w-[150px] text-xs border-[#D4C9A8] bg-white"
             style={{ fontFamily: MONO, fontSize: "11px" }}
           >
             <SelectValue placeholder="Category" />
@@ -233,7 +249,7 @@ export default function InventoryPage() {
         {/* Location */}
         <Select value={locationFilter} onValueChange={handleFilterChange(setLocationFilter)}>
           <SelectTrigger
-            className="h-8 w-[160px] text-xs border-[#E8E0D0] bg-[#FAF7F0]"
+            className="h-8 w-[160px] text-xs border-[#D4C9A8] bg-white"
             style={{ fontFamily: MONO, fontSize: "11px" }}
           >
             <SelectValue placeholder="Location" />
@@ -249,7 +265,7 @@ export default function InventoryPage() {
         {/* Stock Type */}
         <Select value={stockTypeFilter} onValueChange={handleFilterChange(setStockTypeFilter)}>
           <SelectTrigger
-            className="h-8 w-[140px] text-xs border-[#E8E0D0] bg-[#FAF7F0]"
+            className="h-8 w-[140px] text-xs border-[#D4C9A8] bg-white"
             style={{ fontFamily: MONO, fontSize: "11px" }}
           >
             <SelectValue placeholder="Stock Type" />
@@ -267,7 +283,7 @@ export default function InventoryPage() {
         {/* Status */}
         <Select value={statusFilter} onValueChange={handleFilterChange(setStatusFilter)}>
           <SelectTrigger
-            className="h-8 w-[110px] text-xs border-[#E8E0D0] bg-[#FAF7F0]"
+            className="h-8 w-[110px] text-xs border-[#D4C9A8] bg-white"
             style={{ fontFamily: MONO, fontSize: "11px" }}
           >
             <SelectValue placeholder="Status" />
@@ -297,14 +313,14 @@ export default function InventoryPage() {
         <div className="flex-1" />
 
         {/* View toggle */}
-        <div className="flex items-center border rounded-md border-[#E8E0D0] overflow-hidden">
+        <div className="flex items-center border rounded-md border-[#D4C9A8] overflow-hidden">
           <button
             onClick={() => setViewMode("table")}
             className={cn(
               "p-1.5 transition-colors",
               viewMode === "table"
-                ? "bg-[#C9A84C]/15 text-[#8B6914]"
-                : "bg-white text-[#1A1814]/30 hover:bg-[#FAF7F0]"
+                ? "bg-[#C9A84C] text-[#1A1814]"
+                : "bg-white text-[#6B6458] hover:bg-[#F5F1E8]"
             )}
           >
             <LayoutList className="w-4 h-4" />
@@ -314,8 +330,8 @@ export default function InventoryPage() {
             className={cn(
               "p-1.5 transition-colors",
               viewMode === "grid"
-                ? "bg-[#C9A84C]/15 text-[#8B6914]"
-                : "bg-white text-[#1A1814]/30 hover:bg-[#FAF7F0]"
+                ? "bg-[#C9A84C] text-[#1A1814]"
+                : "bg-white text-[#6B6458] hover:bg-[#F5F1E8]"
             )}
           >
             <LayoutGrid className="w-4 h-4" />
@@ -352,7 +368,7 @@ export default function InventoryPage() {
                   size="sm"
                   disabled={page <= 1}
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className="h-7 w-7 p-0 border-[#E8E0D0]"
+                  className="h-7 w-7 p-0 border-[#D4C9A8]"
                 >
                   <ChevronLeft className="w-3.5 h-3.5" />
                 </Button>
@@ -372,10 +388,10 @@ export default function InventoryPage() {
                       size="sm"
                       onClick={() => setPage(pn as number)}
                       className={cn(
-                        "h-7 min-w-7 px-2 text-xs border-[#E8E0D0]",
+                        "h-7 min-w-7 px-2 text-xs border-[#D4C9A8]",
                         pn === page
-                          ? "bg-[#C9A84C] text-white hover:bg-[#B8964E] border-[#C9A84C]"
-                          : "hover:bg-[#FAF7F0]"
+                          ? "bg-[#C9A84C] text-[#1A1814] hover:bg-[#8B6914] border-[#C9A84C]"
+                          : "hover:bg-[#F5F1E8]"
                       )}
                       style={{ fontFamily: MONO }}
                     >
@@ -388,7 +404,7 @@ export default function InventoryPage() {
                   size="sm"
                   disabled={page >= totalPages}
                   onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  className="h-7 w-7 p-0 border-[#E8E0D0]"
+                  className="h-7 w-7 p-0 border-[#D4C9A8]"
                 >
                   <ChevronRight className="w-3.5 h-3.5" />
                 </Button>
@@ -400,6 +416,7 @@ export default function InventoryPage() {
 
       {/* Item detail modal */}
       <ItemDetailModal item={selectedItem} onClose={() => setSelectedItem(null)} />
+      <MemoTrackerDialog open={memoOpen} onClose={() => setMemoOpen(false)} />
     </div>
   );
 }
@@ -416,19 +433,19 @@ function InventoryTable({ items, onSelect }: TableProps) {
     fontFamily: MONO,
     fontSize: "9.5px",
     letterSpacing: "1.5px",
-    color: "#8B8178",
+    color: "#6B6458",
     textTransform: "uppercase",
   };
 
   return (
     <div
       className="rounded-lg border overflow-hidden"
-      style={{ borderColor: "#E8E0D0" }}
+      style={{ borderColor: "#D4C9A8" }}
     >
       <div className="overflow-x-auto">
-        <table className="w-full text-[12px]" style={{ fontFamily: "'Inter', sans-serif" }}>
+        <table className="w-full text-[12px]" style={{ fontFamily: "'Jost', sans-serif" }}>
           <thead>
-            <tr style={{ backgroundColor: "#F5F0E8" }}>
+            <tr style={{ backgroundColor: "#F5F1E8" }}>
               <th className="px-3 py-2.5 text-left" style={THStyle}>Image</th>
               <th className="px-3 py-2.5 text-left" style={THStyle}>Jewel Code</th>
               <th className="px-3 py-2.5 text-left" style={THStyle}>Style No</th>
@@ -451,7 +468,7 @@ function InventoryTable({ items, onSelect }: TableProps) {
                 <tr
                   key={item.id}
                   onClick={() => onSelect(item)}
-                  className="border-t border-[#E8E0D0]/60 cursor-pointer transition-colors hover:bg-[#FAF7F0]"
+                  className="border-t border-[#EDE7D8] cursor-pointer transition-colors hover:bg-[#F5F1E8]"
                   style={{ backgroundColor: "#FFFFFF" }}
                 >
                   <td className="px-3 py-2">
@@ -459,14 +476,14 @@ function InventoryTable({ items, onSelect }: TableProps) {
                       <img
                         src={item.imageUrl}
                         alt={item.jewelCode}
-                        className="w-10 h-10 rounded object-cover border border-[#E8E0D0]"
+                        className="w-10 h-10 rounded object-cover border border-[#D4C9A8]"
                         loading="lazy"
                         onError={(e) => {
                           (e.target as HTMLImageElement).style.display = "none";
                         }}
                       />
                     ) : (
-                      <div className="w-10 h-10 rounded bg-[#F5F0E8] flex items-center justify-center">
+                      <div className="w-10 h-10 rounded bg-[#F5F1E8] flex items-center justify-center">
                         <span className="text-[9px] text-[#1A1814]/20" style={{ fontFamily: MONO }}>
                           N/A
                         </span>
@@ -574,10 +591,10 @@ function InventoryGrid({ items, onSelect }: TableProps) {
           <div
             key={item.id}
             onClick={() => onSelect(item)}
-            className="rounded-lg border border-[#E8E0D0] bg-white cursor-pointer transition-all hover:shadow-md hover:border-[#C9A84C]/40 overflow-hidden group"
+            className="rounded-lg border border-[#D4C9A8] bg-white cursor-pointer transition-all hover:shadow-md hover:border-[#C9A84C]/40 overflow-hidden group"
           >
             {/* Image */}
-            <div className="aspect-square bg-[#F5F0E8] overflow-hidden relative">
+            <div className="aspect-square bg-[#F5F1E8] overflow-hidden relative">
               {item.imageUrl ? (
                 <img
                   src={item.imageUrl}
@@ -676,7 +693,7 @@ function ItemDetailModal({ item, onClose }: ModalProps) {
 
   return (
     <Dialog open={!!item} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-xl bg-white border-[#E8E0D0]">
+      <DialogContent className="max-w-xl bg-white border-[#D4C9A8]">
         <DialogHeader>
           <DialogTitle
             className="text-lg text-[#1A1814]"
@@ -696,13 +713,13 @@ function ItemDetailModal({ item, onClose }: ModalProps) {
               <img
                 src={item.imageUrl}
                 alt={item.jewelCode}
-                className="w-36 h-36 rounded-lg object-cover border border-[#E8E0D0]"
+                className="w-36 h-36 rounded-lg object-cover border border-[#D4C9A8]"
                 onError={(e) => {
                   (e.target as HTMLImageElement).style.display = "none";
                 }}
               />
             ) : (
-              <div className="w-36 h-36 rounded-lg bg-[#F5F0E8] flex items-center justify-center">
+              <div className="w-36 h-36 rounded-lg bg-[#F5F1E8] flex items-center justify-center">
                 <span className="text-xs text-[#1A1814]/20" style={{ fontFamily: MONO }}>
                   NO IMAGE
                 </span>
@@ -726,7 +743,7 @@ function ItemDetailModal({ item, onClose }: ModalProps) {
             {detailRows.map((row) => (
               <div key={row.label}>
                 <p
-                  className="text-[9px] uppercase tracking-[1px] text-[#8B8178] mb-0.5"
+                  className="text-[9px] uppercase tracking-[1px] text-[#6B6458] mb-0.5"
                   style={{ fontFamily: MONO }}
                 >
                   {row.label}
@@ -749,6 +766,196 @@ function ItemDetailModal({ item, onClose }: ModalProps) {
               MEMO TO: {item.memoClientName}
               {item.memoSalesPersonName ? ` | BDM: ${item.memoSalesPersonName}` : ""}
             </p>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---- Memo Tracker Dialog ----
+
+function MemoTrackerDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [bdmFilter, setBdmFilter] = useState("all");
+  const [catFilter, setCatFilter] = useState("all");
+  const [search, setSearch] = useState("");
+  const [memoPage, setMemoPage] = useState(1);
+
+  const { data: memoData } = useQuery({
+    queryKey: ["stock-items-memo"],
+    queryFn: () => fetchStockItems({ status: "Memo", limit: 500 }),
+    enabled: open,
+  });
+
+  const allMemoItems = memoData?.items ?? [];
+
+  // BDM summary cards
+  const bdmSummary = useMemo(() => {
+    const map = new Map<string, { count: number; tagValue: number }>();
+    for (const item of allMemoItems) {
+      const bdm = item.memoSalesPersonName || "Unassigned";
+      const existing = map.get(bdm) || { count: 0, tagValue: 0 };
+      existing.count += 1;
+      existing.tagValue += item.tagPrice;
+      map.set(bdm, existing);
+    }
+    return Array.from(map.entries()).map(([bdm, data]) => ({ bdm, ...data })).sort((a, b) => b.tagValue - a.tagValue);
+  }, [allMemoItems]);
+
+  const bdmOptions = useMemo(() => bdmSummary.map((b) => b.bdm), [bdmSummary]);
+  const catOptions = useMemo(() => {
+    const cats = new Set<string>();
+    for (const item of allMemoItems) if (item.category) cats.add(item.category);
+    return Array.from(cats).sort();
+  }, [allMemoItems]);
+
+  // Filter items
+  const filtered = useMemo(() => {
+    return allMemoItems.filter((item) => {
+      if (bdmFilter !== "all" && (item.memoSalesPersonName || "Unassigned") !== bdmFilter) return false;
+      if (catFilter !== "all" && item.category !== catFilter) return false;
+      if (search.trim()) {
+        const q = search.toLowerCase();
+        if (!item.jewelCode.toLowerCase().includes(q) && !(item.styleNo ?? "").toLowerCase().includes(q) && !(item.memoClientName ?? "").toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+  }, [allMemoItems, bdmFilter, catFilter, search]);
+
+  const MEMO_PER_PAGE = 30;
+  const totalMemoPages = Math.max(1, Math.ceil(filtered.length / MEMO_PER_PAGE));
+  const pagedMemo = filtered.slice((memoPage - 1) * MEMO_PER_PAGE, memoPage * MEMO_PER_PAGE);
+
+  function handleMemoExport() {
+    const headers = ["Jewel Code", "Style No", "Category", "BDM", "Client", "Tag Price", "Pure Wt", "Ageing Days"];
+    const rows = filtered.map((i) => [
+      i.jewelCode, i.styleNo ?? "", i.category ?? "", i.memoSalesPersonName ?? "", i.memoClientName ?? "",
+      i.tagPrice, i.pureWt ?? "", i.ageingDays,
+    ]);
+    downloadCSV("memo-tracker-export.csv", headers, rows);
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto bg-white border-[#D4C9A8]">
+        <DialogHeader>
+          <DialogTitle className="text-lg text-[#1A1814]" style={{ fontFamily: SERIF, fontWeight: 600 }}>
+            Memo Stock Tracker
+          </DialogTitle>
+          <DialogDescription className="text-xs text-[#6B6458]">
+            {allMemoItems.length} items currently on memo
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* BDM Summary Cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 mb-4">
+          {bdmSummary.slice(0, 8).map((b) => (
+            <div
+              key={b.bdm}
+              onClick={() => { setBdmFilter(bdmFilter === b.bdm ? "all" : b.bdm); setMemoPage(1); }}
+              className={cn(
+                "p-2.5 rounded-lg border cursor-pointer transition-colors",
+                bdmFilter === b.bdm ? "border-[#C9A84C] bg-[rgba(201,168,76,0.06)]" : "border-[#D4C9A8] bg-white hover:bg-[#F5F1E8]"
+              )}
+            >
+              <p className="text-[10px] font-medium text-[#1A1814] truncate" style={{ fontFamily: MONO }}>{b.bdm}</p>
+              <p className="text-[12px] font-semibold text-[#8B6914]">{b.count} items</p>
+              <p className="text-[10px] text-[#6B6458]" style={{ fontFamily: MONO }}>{fmt(b.tagValue)}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Filters */}
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <div className="relative w-44">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#1A1814]/30" />
+            <Input
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setMemoPage(1); }}
+              placeholder="Search..."
+              className="h-8 pl-8 text-xs border-[#D4C9A8] bg-white"
+              style={{ fontFamily: MONO, fontSize: "11px" }}
+            />
+          </div>
+          <Select value={catFilter} onValueChange={(v) => { setCatFilter(v); setMemoPage(1); }}>
+            <SelectTrigger className="h-8 w-[140px] text-xs border-[#D4C9A8] bg-white" style={{ fontFamily: MONO, fontSize: "11px" }}>
+              <SelectValue placeholder="Category" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Categories</SelectItem>
+              {catOptions.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <div className="flex-1" />
+          <Button variant="outline" size="sm" onClick={handleMemoExport} className="h-8 text-xs border-[#D4C9A8] text-[#1A1814]/60 hover:bg-[#F5F1E8]">
+            <Download className="w-3.5 h-3.5 mr-1.5" /> Export CSV
+          </Button>
+        </div>
+
+        {/* Table */}
+        <div className="rounded-lg border border-[#D4C9A8] overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px]" style={{ fontFamily: "'Jost', sans-serif" }}>
+              <thead>
+                <tr style={{ backgroundColor: "#F5F1E8" }}>
+                  {["Image", "BDM / Holder", "Jewel Code", "Style No", "Category", "Tag \u20B9", "Pure Wt", "Ageing", "Status"].map((h) => (
+                    <th key={h} className="px-3 py-2 text-left text-[9.5px] tracking-[1.5px] uppercase text-[#6B6458]" style={{ fontFamily: MONO }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {pagedMemo.map((item) => (
+                  <tr key={item.id} className="border-t border-[#EDE7D8] hover:bg-[#F5F1E8] transition-colors">
+                    <td className="px-3 py-2">
+                      {item.imageUrl ? (
+                        <img src={item.imageUrl} alt="" className="w-9 h-9 rounded object-cover border border-[#D4C9A8]" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                      ) : (
+                        <div className="w-9 h-9 rounded bg-[#F5F1E8] flex items-center justify-center">
+                          <span className="text-[8px] text-[#1A1814]/20" style={{ fontFamily: MONO }}>N/A</span>
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      <p className="text-[11px] font-medium text-[#1A1814]">{item.memoSalesPersonName || "\u2014"}</p>
+                      <p className="text-[10px] text-[#6B6458]">{item.memoClientName || "\u2014"}</p>
+                    </td>
+                    <td className="px-3 py-2 text-[#1A1814] font-medium" style={{ fontFamily: MONO, fontSize: "11px" }}>{item.jewelCode}</td>
+                    <td className="px-3 py-2 text-[#1A1814]/60" style={{ fontFamily: MONO, fontSize: "11px" }}>{item.styleNo ?? "\u2014"}</td>
+                    <td className="px-3 py-2 text-[#1A1814]/70">{item.category ?? "\u2014"}</td>
+                    <td className="px-3 py-2 text-right" style={{ fontFamily: MONO, fontSize: "11px" }}>{fmt(item.tagPrice)}</td>
+                    <td className="px-3 py-2 text-right text-[#1A1814]/60" style={{ fontFamily: MONO, fontSize: "11px" }}>{item.pureWt ? `${parseFloat(item.pureWt).toFixed(2)}g` : "\u2014"}</td>
+                    <td className="px-3 py-2 text-center">
+                      <span className={cn("inline-block text-[9px] px-2 py-0.5 rounded-full font-medium", ageTagClass(getAgeingTag(item.ageingDays)))}>{item.ageingDays}d</span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <Badge variant="secondary" className="text-[9px] px-1.5 py-0 h-4 border-0 bg-[#FFF4E0] text-[#8B5E00]">Memo</Badge>
+                    </td>
+                  </tr>
+                ))}
+                {pagedMemo.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="px-4 py-8 text-center text-sm text-[#1A1814]/30">No memo items found</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Pagination */}
+        {totalMemoPages > 1 && (
+          <div className="flex items-center justify-between mt-3">
+            <p className="text-[11px] text-[#1A1814]/40" style={{ fontFamily: MONO }}>
+              Page {memoPage} of {totalMemoPages} &middot; {filtered.length} items
+            </p>
+            <div className="flex items-center gap-1.5">
+              <Button variant="outline" size="sm" disabled={memoPage <= 1} onClick={() => setMemoPage((p) => p - 1)} className="h-7 w-7 p-0 border-[#D4C9A8]">
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </Button>
+              <Button variant="outline" size="sm" disabled={memoPage >= totalMemoPages} onClick={() => setMemoPage((p) => p + 1)} className="h-7 w-7 p-0 border-[#D4C9A8]">
+                <ChevronRight className="w-3.5 h-3.5" />
+              </Button>
+            </div>
           </div>
         )}
       </DialogContent>

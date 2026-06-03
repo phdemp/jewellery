@@ -2195,6 +2195,22 @@ export async function registerRoutes(
     }
   });
 
+  // ── Stock categories (for assortment filter dropdown) ─────────────────
+  app.get("/api/assortment/stock-categories", async (_req, res) => {
+    try {
+      const rows = await db.execute(sql`
+        SELECT DISTINCT category FROM live_stock_items
+        WHERE category IS NOT NULL AND TRIM(category) <> '' AND current_status = 'On Hand'
+        ORDER BY category
+      `);
+      const categories = (rows.rows as { category: string }[]).map(r => r.category);
+      res.json({ categories });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
   // ── BDM profile ─────────────────────────────────────────────────────────
   app.get("/api/assortment/bdm-profile/:bdmName", async (req, res) => {
     try {
@@ -2699,16 +2715,22 @@ export async function registerRoutes(
       if (ageingTag) {
         switch (ageingTag) {
           case "Fresh":
-            fragments.push(sql`${liveStockItems.ageingDays} >= 0 AND ${liveStockItems.ageingDays} <= 90`);
+            fragments.push(sql`${liveStockItems.ageingDays} >= 0 AND ${liveStockItems.ageingDays} <= 30`);
             break;
-          case "Watch":
+          case "Active":
+            fragments.push(sql`${liveStockItems.ageingDays} >= 31 AND ${liveStockItems.ageingDays} <= 60`);
+            break;
+          case "Moderate":
+            fragments.push(sql`${liveStockItems.ageingDays} >= 61 AND ${liveStockItems.ageingDays} <= 90`);
+            break;
+          case "Slow Moving":
             fragments.push(sql`${liveStockItems.ageingDays} >= 91 AND ${liveStockItems.ageingDays} <= 180`);
             break;
-          case "Slow":
-            fragments.push(sql`${liveStockItems.ageingDays} >= 181 AND ${liveStockItems.ageingDays} <= 365`);
+          case "Ageing":
+            fragments.push(sql`${liveStockItems.ageingDays} >= 181 AND ${liveStockItems.ageingDays} <= 270`);
             break;
-          case "Dead Stock":
-            fragments.push(sql`${liveStockItems.ageingDays} > 365`);
+          case "Non-Moving":
+            fragments.push(sql`${liveStockItems.ageingDays} > 270`);
             break;
         }
       }
@@ -3293,7 +3315,9 @@ export async function registerRoutes(
 
   app.get("/api/b2b-sales/bdm/:name/clients", async (req, res) => {
     try {
-      const clients = await storage.getB2bClientsForBdm(req.params.name);
+      const stateName = req.query.state ? String(req.query.state) : undefined;
+      console.log(`[clients] bdm=${req.params.name} state=${stateName || "(all)"}`);
+      const clients = await storage.getB2bClientsForBdm(req.params.name, stateName);
       res.json({ clients });
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -3301,11 +3325,162 @@ export async function registerRoutes(
     }
   });
 
+  // ── Exhibition Assortment Endpoints ────────────────────────────────────
+
+  app.get("/api/assortment/exhibition-list", async (_req, res) => {
+    try {
+      const exhibitions = await storage.getExhibitionList();
+      res.json({ exhibitions });
+    } catch (error: unknown) {
+      console.error("[exhibition-list] Error:", error);
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get("/api/assortment/exhibition-signals", async (req, res) => {
+    try {
+      const exhibition = (req.query.exhibition as string) || "all";
+      const signals = await storage.getExhibitionSignals(exhibition === "all" ? undefined : exhibition);
+      res.json({ signals });
+    } catch (error: unknown) {
+      console.error("[exhibition-signals] Error:", error);
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post("/api/assortment/exhibition-score", async (req, res) => {
+    try {
+      const { exhibition, kitSize = 100 } = req.body;
+      console.log(`[exhibition-score] Starting for exhibition: ${exhibition || "all"}, kitSize: ${kitSize}`);
+
+      const signals = await storage.getExhibitionSignals(
+        exhibition && exhibition !== "all" ? exhibition : undefined
+      );
+
+      const { scoreExhibitionAssortment } = await import("./assortment-scorer");
+      const result = await scoreExhibitionAssortment(signals, kitSize);
+
+      // Map to frontend shape matching AiScoredItem
+      const responseItems = result.items.map(item => {
+        const ageTag = item.ageingDays <= 30 ? "Fresh" : item.ageingDays <= 60 ? "Active" : item.ageingDays <= 90 ? "Moderate" : item.ageingDays <= 180 ? "Slow Moving" : item.ageingDays <= 270 ? "Ageing" : "Non-Moving";
+        return {
+          jewelCode: item.jewelCode,
+          styleNo: item.styleNo,
+          category: item.category,
+          tagPrice: item.tagPrice,
+          costPrice: item.costPrice,
+          ageingDays: item.ageingDays,
+          ageTag,
+          grossWt: item.grossWt,
+          pureWt: item.pureWt,
+          totDiaWt: item.totDiaWt,
+          baseMetal: item.baseMetal,
+          stockType: item.stockType,
+          location: item.location,
+          imageUrl: item.imageUrl,
+          score: Math.min(100, Math.round(item.score * 10)), // scale to 0-100, capped
+          tier: item.matchType === "strong" ? "STRONG MATCH" : item.matchType === "good" ? "GOOD MATCH" : "POSSIBLE",
+          matchType: item.matchType,
+          reasons: item.reasons,
+          scoreBreakdown: { visual: 0, category: 0, price: 0, ageing: 0, uniqueness: 0 },
+        };
+      });
+
+      res.json({
+        items: responseItems,
+        signalCount: result.signalCount,
+        exhibition: exhibition || "all",
+      });
+    } catch (error: unknown) {
+      console.error("[exhibition-score] Error:", error);
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get("/api/assortment/locations", async (_req, res) => {
+    try {
+      const locations = await storage.getDistinctLocations();
+      res.json({ locations });
+    } catch (error: unknown) {
+      console.error("[locations] Error:", error);
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.post("/api/assortment/location-score", async (req, res) => {
+    try {
+      const { destination, kitSize = 100 } = req.body;
+      console.log(`[location-score] Scoring for destination: ${destination || "all"}, kitSize: ${kitSize}`);
+
+      // Fetch on-hand items NOT at the destination (items to dispatch there)
+      let whereExtra = "";
+      if (destination) {
+        whereExtra = ` AND UPPER(location) NOT LIKE '%${destination.toUpperCase().replace(/'/g, "''")}%'`;
+      }
+      const candidateResult = await db.execute(sql.raw(`
+        SELECT jewel_code, style_no, category, tag_price, cost_price,
+               ageing_days, gross_wt, pure_wt, tot_dia_wt, stock_type,
+               location, image_url, base_metal, current_status
+        FROM live_stock_items
+        WHERE current_status = 'On Hand'${whereExtra}
+        ORDER BY tag_price DESC
+        LIMIT ${kitSize * 3}
+      `));
+
+      const rows = candidateResult.rows as Record<string, unknown>[];
+      const responseItems = rows.map(row => {
+        const ageingDays = Number(row.ageing_days) || 0;
+        const tagPrice = Number(row.tag_price) || 0;
+        // Score: ageing urgency (older = higher) + price normalization
+        const ageScore = ageingDays > 270 ? 30 : ageingDays > 180 ? 25 : ageingDays > 90 ? 20 : ageingDays > 60 ? 15 : 10;
+        const priceScore = Math.min(30, Math.round((tagPrice / 1000000) * 10));
+        const score = Math.min(100, ageScore + priceScore + 30); // base 30 + ageing + price
+        const ageTag = ageingDays <= 30 ? "Fresh" : ageingDays <= 60 ? "Active" : ageingDays <= 90 ? "Moderate" : ageingDays <= 180 ? "Slow Moving" : ageingDays <= 270 ? "Ageing" : "Non-Moving";
+        const reasons = [];
+        if (ageingDays > 90) reasons.push({ tag: "slow", text: `${ageingDays} days aged \u2014 priority dispatch` });
+        if (tagPrice > 500000) reasons.push({ tag: "band", text: `High value item: \u20B9${(tagPrice/100000).toFixed(1)}L` });
+        reasons.push({ tag: "new", text: `Available at ${row.location || "main store"}` });
+
+        return {
+          jewelCode: String(row.jewel_code || ""),
+          styleNo: String(row.style_no || ""),
+          category: String(row.category || ""),
+          tagPrice,
+          costPrice: Number(row.cost_price) || 0,
+          ageingDays,
+          ageTag,
+          grossWt: String(row.gross_wt || "0"),
+          pureWt: String(row.pure_wt || "0"),
+          totDiaWt: String(row.tot_dia_wt || "0"),
+          baseMetal: String(row.base_metal || ""),
+          stockType: String(row.stock_type || ""),
+          location: String(row.location || ""),
+          imageUrl: String(row.image_url || ""),
+          score,
+          tier: score >= 80 ? "MUST INCLUDE" : score >= 60 ? "RECOMMENDED" : "OPTIONAL",
+          reasons,
+          scoreBreakdown: { visual: 0, category: 0, price: 0, ageing: 0, uniqueness: 0 },
+        };
+      });
+
+      responseItems.sort((a, b) => b.score - a.score);
+
+      res.json({
+        items: responseItems.slice(0, kitSize * 3),
+        profile: null,
+        timing: { totalMs: 0, method: "formula" as const },
+      });
+    } catch (error: unknown) {
+      console.error("[location-score] Error:", error);
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   // ── AI Assortment Scoring (vector-based) ─────────────────────────────────
 
   app.post("/api/assortment/ai-score", async (req, res) => {
     try {
-      const { bdmName, stateName, clientName, kitSize = 100, weightMin, weightMax } = req.body;
+      const { bdmName, stateName, clientName, kitSize = 100, weightMin, weightMax, weights } = req.body;
       if (!bdmName) {
         return res.status(400).json({ error: "bdmName is required" });
       }
@@ -3363,14 +3538,51 @@ export async function registerRoutes(
       const { scoreAssortment } = await import("./assortment-scorer");
       const result = await scoreAssortment(
         sales, fallbackCandidates, bdmName, stateName, clientName,
-        kitSize, weightMin, weightMax
+        kitSize, weightMin, weightMax, weights
       );
+
+      // Build category→top client map from BDM's sales (for per-card client labels)
+      const catClientMap = new Map<string, string>();
+      if (!clientName && sales.length > 0) {
+        const catClientCount = new Map<string, Map<string, number>>();
+        for (const s of sales) {
+          const cat = (s.categoryGroup || s.category || "").toUpperCase().trim();
+          const cli = (s.clientName || "").trim();
+          if (!cat || !cli) continue;
+          if (!catClientCount.has(cat)) catClientCount.set(cat, new Map());
+          const m = catClientCount.get(cat)!;
+          m.set(cli, (m.get(cli) || 0) + 1);
+        }
+        for (const [cat, clients] of Array.from(catClientCount.entries())) {
+          let topClient = "";
+          let topCount = 0;
+          for (const [cli, cnt] of Array.from(clients.entries())) {
+            if (cnt > topCount) { topClient = cli; topCount = cnt; }
+          }
+          if (topClient) catClientMap.set(cat, topClient);
+        }
+      }
 
       // Map to frontend shape
       const responseItems = result.items.slice(0, kitSize * 3).map(item => {
         const c = item.inventoryData;
-        const tier = item.total >= 70 ? "MUST INCLUDE" : item.total >= 45 ? "RECOMMENDED" : item.total >= 20 ? "OPTIONAL" : null;
-        const ageTag = c.ageingDays <= 90 ? "Fresh" : c.ageingDays <= 180 ? "Watch" : c.ageingDays <= 365 ? "Slow" : "Dead Stock";
+        const tier = item.total >= 65 ? "MUST INCLUDE" : item.total >= 40 ? "RECOMMENDED" : item.total >= 20 ? "OPTIONAL" : null;
+        const ageTag = c.ageingDays <= 30 ? "Fresh" : c.ageingDays <= 60 ? "Active" : c.ageingDays <= 90 ? "Moderate" : c.ageingDays <= 180 ? "Slow Moving" : c.ageingDays <= 270 ? "Ageing" : "Non-Moving";
+        // Target client: explicit selection > category-based match (exact then fuzzy) > top overall
+        const catKey = (c.category || "").toUpperCase().trim();
+        let suggestedClient = clientName || catClientMap.get(catKey) || "";
+        if (!suggestedClient && catKey) {
+          // Fuzzy: find sales category that the stock category contains or vice versa
+          for (const [salesCat, cli] of Array.from(catClientMap.entries())) {
+            if (catKey.includes(salesCat) || salesCat.includes(catKey)) {
+              suggestedClient = cli;
+              break;
+            }
+          }
+        }
+        if (!suggestedClient && catClientMap.size > 0) {
+          suggestedClient = Array.from(catClientMap.values())[0];
+        }
         return {
           jewelCode: c.jewelCode,
           styleNo: c.styleNo,
@@ -3390,6 +3602,7 @@ export async function registerRoutes(
           tier,
           reasons: item.reasons,
           scoreBreakdown: item.breakdown,
+          targetClient: suggestedClient,
         };
       });
 

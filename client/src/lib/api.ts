@@ -1328,6 +1328,20 @@ export async function fetchOptimizationRuns(): Promise<{ items: OptimizationRunE
 
 // -- AI Assortment Scoring API -----------------------------------------------
 
+export interface ScoringWeights {
+  visual: number;
+  attribute: number;
+  velocity: number;
+  ageing: number;
+}
+
+export const WEIGHT_PRESETS: Record<string, { label: string; weights: ScoringWeights; description: string }> = {
+  lookalike:  { label: "Look-alike",     weights: { visual: 80, attribute: 10, velocity: 5, ageing: 5 },   description: "Find pieces that LOOK exactly like what they bought" },
+  balanced:   { label: "Balanced",       weights: { visual: 60, attribute: 15, velocity: 15, ageing: 10 }, description: "Look-alike + market trends" },
+  trending:   { label: "Market Trends",  weights: { visual: 40, attribute: 20, velocity: 30, ageing: 10 }, description: "Focus on what is selling well in the market" },
+  clearance:  { label: "Move Old Stock", weights: { visual: 45, attribute: 15, velocity: 10, ageing: 30 }, description: "Help move older stock that matches their style" },
+};
+
 export interface AiScoreRequest {
   bdmName: string;
   stateName?: string;
@@ -1335,6 +1349,7 @@ export interface AiScoreRequest {
   kitSize?: number;
   weightMin?: number;
   weightMax?: number;
+  weights?: ScoringWeights;
 }
 
 export interface AiScoreBreakdown {
@@ -1364,6 +1379,7 @@ export interface AiScoredItem {
   tier: "MUST INCLUDE" | "RECOMMENDED" | "OPTIONAL" | null;
   reasons: Array<{ tag: string; text: string }>;
   scoreBreakdown: AiScoreBreakdown;
+  targetClient?: string;
 }
 
 export interface AiScoreProfile {
@@ -1390,6 +1406,66 @@ export interface AiScoreResponse {
   };
 }
 
+// ── Exhibition Assortment APIs ─────────────────────────────────────────
+
+export interface ExhibitionSummary {
+  name: string;
+  interestCount: number;
+  uniqueSkuCount: number;
+  customerCount: number;
+}
+
+export interface ExhibitionScoreResponse {
+  items: AiScoredItem[];
+  signalCount: number;
+  exhibition: string;
+}
+
+export async function fetchExhibitionList(): Promise<{ exhibitions: ExhibitionSummary[] }> {
+  const response = await fetch("/api/assortment/exhibition-list");
+  if (!response.ok) throw new Error("Failed to fetch exhibition list");
+  return response.json();
+}
+
+export async function fetchExhibitionSignals(exhibition?: string): Promise<{ signals: Array<{ parentStyle: string; category: string; makeType: string; interestCount: number; customerCount: number; exhibitions: string[] }> }> {
+  const params = exhibition ? `?exhibition=${encodeURIComponent(exhibition)}` : "";
+  const response = await fetch(`/api/assortment/exhibition-signals${params}`);
+  if (!response.ok) throw new Error("Failed to fetch exhibition signals");
+  return response.json();
+}
+
+export async function generateExhibitionScore(exhibition: string, kitSize: number = 100): Promise<ExhibitionScoreResponse> {
+  const response = await fetch("/api/assortment/exhibition-score", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ exhibition, kitSize }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: "Exhibition scoring failed" }));
+    throw new Error(err.error || "Exhibition scoring failed");
+  }
+  return response.json();
+}
+
+export async function fetchLocations(): Promise<{ locations: string[] }> {
+  const response = await fetch("/api/assortment/locations");
+  if (!response.ok) throw new Error("Failed to fetch locations");
+  return response.json();
+}
+
+export async function generateLocationScore(destination: string, kitSize: number = 100): Promise<AiScoreResponse> {
+  const response = await fetch("/api/assortment/location-score", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ destination, kitSize }),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: "Location scoring failed" }));
+    throw new Error(err.error || "Location scoring failed");
+  }
+  return response.json();
+}
+
 export async function generateAiAssortmentScore(request: AiScoreRequest): Promise<AiScoreResponse> {
   const response = await fetch("/api/assortment/ai-score", {
     method: "POST",
@@ -1409,14 +1485,21 @@ export async function fetchB2bBdmList(): Promise<{ bdms: string[] }> {
   return response.json();
 }
 
+export async function fetchStockCategories(): Promise<{ categories: string[] }> {
+  const response = await fetch("/api/assortment/stock-categories");
+  if (!response.ok) throw new Error("Failed to fetch stock categories");
+  return response.json();
+}
+
 export async function fetchB2bStatesForBdm(bdmName: string): Promise<{ states: string[] }> {
   const response = await fetch(`/api/b2b-sales/bdm/${encodeURIComponent(bdmName)}/states`);
   if (!response.ok) throw new Error("Failed to fetch states");
   return response.json();
 }
 
-export async function fetchB2bClientsForBdm(bdmName: string): Promise<{ clients: Array<{ name: string; spend: number; count: number }> }> {
-  const response = await fetch(`/api/b2b-sales/bdm/${encodeURIComponent(bdmName)}/clients`);
+export async function fetchB2bClientsForBdm(bdmName: string, stateName?: string): Promise<{ clients: Array<{ name: string; spend: number; count: number }> }> {
+  const params = stateName ? `?state=${encodeURIComponent(stateName)}` : "";
+  const response = await fetch(`/api/b2b-sales/bdm/${encodeURIComponent(bdmName)}/clients${params}`);
   if (!response.ok) throw new Error("Failed to fetch clients");
   return response.json();
 }

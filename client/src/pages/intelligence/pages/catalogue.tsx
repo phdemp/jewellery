@@ -1,22 +1,26 @@
 import { useState, useMemo } from "react";
 import { DATA } from "../lib/intelligence-data";
-import { fmt, getDriveImgUrl, generateKitId } from "../lib/intelligence-utils";
+import { fmt, getDriveImgUrl, generateKitId, downloadCSV } from "../lib/intelligence-utils";
 import { useIntelligence } from "../intelligence-context";
 import { cn } from "@/lib/utils";
 import type { InventoryItem, DispatchKit, KitItem } from "../lib/intelligence-types";
 import { useQuery } from "@tanstack/react-query";
 import { fetchStockItems, fetchStockSummary } from "@/lib/api";
 import type { LiveStockItem } from "@/lib/api";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Download, Printer } from "lucide-react";
 
 const ITEMS_PER_PAGE = 48;
 
 export default function VisualCatalogue() {
-  const { goldPrice, setGoldPrice, addToKitQueue, logAudit, setActivePage } = useIntelligence();
+  const { goldPrice, setGoldPrice, addToKitQueue, logAudit, setActivePage, catalogueClient, setCatalogueClient } = useIntelligence();
 
   const [activeCat, setActiveCat] = useState<string>("All");
   const [localGoldPrice, setLocalGoldPrice] = useState(goldPrice || 0);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
+  const [ageingFilter, setAgeingFilter] = useState<string>("all");
+  const [locationFilter, setLocationFilter] = useState<string>("all");
 
   // Live API: fetch categories from summary
   const { data: summary } = useQuery({
@@ -39,9 +43,14 @@ export default function VisualCatalogue() {
     return ["All", ...Array.from(cats).sort()];
   }, [summary]);
 
+  const locationOptions = useMemo(
+    () => (summary?.locationBreakdown ?? []).map((l: { location: string }) => l.location).filter(Boolean).sort(),
+    [summary],
+  );
+
   // Live API: fetch stock items for catalogue
   const { data: stockData, isLoading } = useQuery({
-    queryKey: ["stock-items-catalogue", activeCat, page],
+    queryKey: ["stock-items-catalogue", activeCat, page, ageingFilter, locationFilter],
     queryFn: () => fetchStockItems({
       status: "On Hand",
       limit: ITEMS_PER_PAGE,
@@ -49,6 +58,8 @@ export default function VisualCatalogue() {
       sortBy: "tagPrice",
       sortDir: "desc",
       ...(activeCat !== "All" ? { category: activeCat } : {}),
+      ...(ageingFilter !== "all" ? { ageingTag: ageingFilter } : {}),
+      ...(locationFilter !== "all" ? { location: locationFilter } : {}),
     }),
   });
 
@@ -79,6 +90,18 @@ export default function VisualCatalogue() {
     return selectedDetails.reduce((sum, i) => sum + i.tagPrice, 0);
   }, [selectedDetails]);
 
+  const totalPureWt = useMemo(() => {
+    return selectedDetails.reduce((sum, i) => sum + (i.pureWt ? parseFloat(i.pureWt) : 0), 0);
+  }, [selectedDetails]);
+
+  const totalSellingPrice = useMemo(() => {
+    if (goldPrice <= 0) return 0;
+    return selectedDetails.reduce((sum, i) => {
+      const pw = i.pureWt ? parseFloat(i.pureWt) : 0;
+      return sum + (i.tagPrice / 2 + pw * goldPrice);
+    }, 0);
+  }, [selectedDetails, goldPrice]);
+
   function toggleItem(jc: string) {
     setSelectedItems((prev) => {
       const next = new Set(prev);
@@ -91,6 +114,18 @@ export default function VisualCatalogue() {
   function handleGoldPriceChange(val: number) {
     setLocalGoldPrice(val);
     if (val > 0) setGoldPrice(val);
+  }
+
+  function handleExportCSV() {
+    const headers = ["Jewel Code", "Style No", "Category", "Tag Price", "Gross Wt", "Base Metal", "Diamond Wt"];
+    const rows = pagedItems.map((i) => [
+      i.jewelCode, i.styleNo, i.catSimple, i.tagPrice, i.grossWt.toFixed(1), i.baseMetal, i.diaWt.toFixed(2),
+    ]);
+    downloadCSV("catalogue-export.csv", headers, rows);
+  }
+
+  function handlePrint() {
+    window.print();
   }
 
   function handleSendForApproval() {
@@ -112,7 +147,7 @@ export default function VisualCatalogue() {
       tagPrice: item.tagPrice,
       gp: item.tagPrice > 0 ? ((item.tagPrice - item.costPrice) / item.tagPrice) * 100 : 0,
       ageingDays: item.ageingDays,
-      ageingTag: (item.ageingDays <= 90 ? "Fresh" : item.ageingDays <= 180 ? "Watch" : item.ageingDays <= 365 ? "Slow" : "Dead Stock") as "Fresh" | "Watch" | "Slow" | "Dead Stock",
+      ageingTag: (item.ageingDays <= 30 ? "Fresh" : item.ageingDays <= 60 ? "Active" : item.ageingDays <= 90 ? "Moderate" : item.ageingDays <= 180 ? "Slow Moving" : item.ageingDays <= 270 ? "Ageing" : "Non-Moving") as "Fresh" | "Active" | "Moderate" | "Slow Moving" | "Ageing" | "Non-Moving",
       perfTag: "Average" as const,
       grossWt: item.grossWt ? parseFloat(item.grossWt) : 0,
       pureWt: item.pureWt ? parseFloat(item.pureWt) : 0,
@@ -128,7 +163,7 @@ export default function VisualCatalogue() {
       ? kitItems.reduce((sum, i) => sum + i.gp, 0) / kitItems.length
       : 0;
 
-    const deadStockCleared = kitItems.filter((i) => i.ageingTag === "Dead Stock").length;
+    const deadStockCleared = kitItems.filter((i) => i.ageingTag === "Slow Moving" || i.ageingTag === "Ageing" || i.ageingTag === "Non-Moving").length;
 
     const kit: DispatchKit = {
       id: kitId,
@@ -168,6 +203,23 @@ export default function VisualCatalogue() {
 
   return (
     <div className="space-y-4">
+      <div style={{ height: 2, background: "linear-gradient(90deg, #C9A84C, transparent)", marginBottom: 20, borderRadius: 1 }} />
+      {catalogueClient && (
+        <div className="flex items-center justify-between px-4 py-2.5 rounded-lg border border-[#C9A84C]/30 bg-[rgba(201,168,76,0.06)]">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-medium text-[#8B6914] uppercase tracking-wider" style={{ fontFamily: "'DM Mono', monospace" }}>
+              Client Selection
+            </span>
+            <span className="text-[13px] font-semibold text-[#2C2520]">{catalogueClient}</span>
+          </div>
+          <button
+            onClick={() => setCatalogueClient(null)}
+            className="text-[11px] text-[#6B6458] hover:text-[#A63C2A] transition-colors"
+          >
+            Clear
+          </button>
+        </div>
+      )}
       {/* Top Controls */}
       <div className="flex items-center gap-4 flex-wrap">
         {/* Category Filter Pills */}
@@ -182,8 +234,8 @@ export default function VisualCatalogue() {
               className={cn(
                 "px-4 py-1.5 rounded-full text-[12px] font-medium whitespace-nowrap border transition-colors",
                 activeCat === cat
-                  ? "bg-[#C9A84C] text-white border-[#C9A84C]"
-                  : "bg-white text-[#6B6458] border-[#D4C9A8] hover:border-[#C9A84C] hover:bg-[#FAF8F5]",
+                  ? "bg-[#C9A84C] text-[#1A1814] border-[#C9A84C]"
+                  : "bg-white text-[#6B6458] border-[#D4C9A8] hover:border-[#C9A84C] hover:bg-[#F5F1E8]",
               )}
             >
               {cat}
@@ -204,6 +256,51 @@ export default function VisualCatalogue() {
             className="w-[90px] text-[13px] px-2 py-1.5 border border-[#D4C9A8] rounded bg-white focus:border-[#C9A84C] focus:outline-none"
           />
         </div>
+
+        {/* Ageing Filter */}
+        <Select value={ageingFilter} onValueChange={(v) => { setAgeingFilter(v); setPage(1); }}>
+          <SelectTrigger className="h-8 w-[130px] text-xs border-[#D4C9A8] bg-white shrink-0" style={{ fontFamily: "'DM Mono', monospace", fontSize: "11px" }}>
+            <SelectValue placeholder="Ageing" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Ageing</SelectItem>
+            <SelectItem value="Fresh">Fresh</SelectItem>
+            <SelectItem value="Active">Active</SelectItem>
+            <SelectItem value="Moderate">Moderate</SelectItem>
+            <SelectItem value="Slow Moving">Slow Moving</SelectItem>
+            <SelectItem value="Ageing">Ageing</SelectItem>
+            <SelectItem value="Non-Moving">Non-Moving</SelectItem>
+          </SelectContent>
+        </Select>
+
+        {/* Location Filter */}
+        <Select value={locationFilter} onValueChange={(v) => { setLocationFilter(v); setPage(1); }}>
+          <SelectTrigger className="h-8 w-[150px] text-xs border-[#D4C9A8] bg-white shrink-0" style={{ fontFamily: "'DM Mono', monospace", fontSize: "11px" }}>
+            <SelectValue placeholder="Location" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Locations</SelectItem>
+            {locationOptions.map((l: string) => (
+              <SelectItem key={l} value={l}>{l}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {/* Export & Print */}
+        <button
+          onClick={handleExportCSV}
+          className="flex items-center gap-1 px-3 py-1.5 text-[11px] border border-[#D4C9A8] rounded bg-white text-[#3D3830] hover:bg-[#F5F1E8] transition-colors shrink-0"
+        >
+          <Download className="w-3.5 h-3.5" />
+          CSV
+        </button>
+        <button
+          onClick={handlePrint}
+          className="flex items-center gap-1 px-3 py-1.5 text-[11px] border border-[#D4C9A8] rounded bg-white text-[#3D3830] hover:bg-[#F5F1E8] transition-colors shrink-0"
+        >
+          <Printer className="w-3.5 h-3.5" />
+          Print
+        </button>
       </div>
 
       {/* Items count */}
@@ -244,7 +341,7 @@ export default function VisualCatalogue() {
               )}
 
               {/* Image */}
-              <div className="h-[180px] bg-[#FAF8F5] overflow-hidden">
+              <div className="h-[180px] bg-[#F5F1E8] overflow-hidden">
                 {item.imageUrl ? (
                   <img
                     src={item.imageUrl}
@@ -261,15 +358,15 @@ export default function VisualCatalogue() {
               </div>
 
               {/* Content */}
-              <div className="p-2.5">
+              <div className="p-3">
                 <div
-                  className="text-[12px] font-mono text-[#6B6458] truncate mb-0.5"
+                  className="text-[10px] font-mono text-[#6B6458] truncate mb-0.5"
                   style={{ fontFamily: "'DM Mono', monospace" }}
                 >
                   {item.styleNo}
                 </div>
 
-                <div className="text-[11px] text-[#8B7E6E] mb-1">{item.catSimple}</div>
+                <div className="text-[11px] text-[#6B6458] mb-1">{item.catSimple}</div>
 
                 <div className="text-[18px] font-semibold text-[#8B6914] mb-1.5">
                   {fmt(item.tagPrice)}
@@ -277,10 +374,10 @@ export default function VisualCatalogue() {
 
                 {/* Meta tags */}
                 <div className="flex flex-wrap gap-1">
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#F5F0E8] text-[#6B6458]">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#F5F1E8] text-[#6B6458]">
                     {item.grossWt.toFixed(1)}g
                   </span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#F5F0E8] text-[#6B6458]">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#F5F1E8] text-[#6B6458]">
                     {item.baseMetal}
                   </span>
                   {item.diaWt > 0 && (
@@ -302,7 +399,7 @@ export default function VisualCatalogue() {
           <button
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page === 1}
-            className="px-3 py-1.5 text-[12px] border border-[#D4C9A8] rounded hover:bg-[#FAF8F5] disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-3 py-1.5 text-[12px] border border-[#D4C9A8] rounded hover:bg-[#F5F1E8] disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Prev
           </button>
@@ -312,7 +409,7 @@ export default function VisualCatalogue() {
           <button
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             disabled={page === totalPages}
-            className="px-3 py-1.5 text-[12px] border border-[#D4C9A8] rounded hover:bg-[#FAF8F5] disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-3 py-1.5 text-[12px] border border-[#D4C9A8] rounded hover:bg-[#F5F1E8] disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Next
           </button>
@@ -336,7 +433,7 @@ export default function VisualCatalogue() {
               {selectedDetails.slice(0, 12).map((item) => (
                   <div
                     key={item.jewelCode}
-                    className="w-10 h-10 rounded border border-[#D4C9A8] bg-[#FAF8F5] flex-shrink-0 overflow-hidden"
+                    className="w-10 h-10 rounded border border-[#D4C9A8] bg-[#F5F1E8] flex-shrink-0 overflow-hidden"
                   >
                     {item.imageUrl ? (
                       <img src={item.imageUrl} alt="" className="w-full h-full object-contain" />
@@ -361,10 +458,14 @@ export default function VisualCatalogue() {
                 <div className="text-[14px] font-semibold text-[#C9A84C]">
                   {fmt(totalValue)}
                 </div>
+                <div className="text-[11px] text-[#6B6458]">
+                  Pure Wt: {totalPureWt.toFixed(2)}g
+                  {goldPrice > 0 && ` · Selling: ${fmt(Math.round(totalSellingPrice))}`}
+                </div>
               </div>
               <button
                 onClick={handleSendForApproval}
-                className="px-5 py-2.5 bg-[#C9A84C] text-white text-[13px] font-semibold rounded-lg hover:bg-[#B8972F] transition-colors"
+                className="px-5 py-2.5 bg-[#C9A84C] text-white text-[13px] font-semibold rounded-lg hover:bg-[#8B6914] transition-colors"
               >
                 Send for Approval
               </button>

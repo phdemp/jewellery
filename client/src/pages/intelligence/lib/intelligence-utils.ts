@@ -22,9 +22,11 @@ export function getDriveImgUrl(url: string): string {
 export function ageTagClass(tag: string): string {
   const cls: Record<string, string> = {
     Fresh: "bg-[#E8F5EC] text-[#2D6B42]",
-    Watch: "bg-[#FFF4E0] text-[#8B5E00]",
-    Slow: "bg-[#FFE8D6] text-[#8B3A00]",
-    "Dead Stock": "bg-[#FDEAEA] text-[#8B1A1A]",
+    Active: "bg-[#E8F5EC] text-[#2D6B42]",
+    Moderate: "bg-[#FFF4E0] text-[#8B5E00]",
+    "Slow Moving": "bg-[#FFE8D6] text-[#8B3A00]",
+    Ageing: "bg-[#FDEAEA] text-[#8B1A1A]",
+    "Non-Moving": "bg-[#FDEAEA] text-[#8B1A1A]",
   };
   return cls[tag] || "bg-[#F5F5F5] text-[#555]";
 }

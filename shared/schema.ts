@@ -430,3 +430,31 @@ export const insertB2bSalesHistorySchema = createInsertSchema(b2bSalesHistory).o
 
 export type InsertB2bSalesHistory = z.infer<typeof insertB2bSalesHistorySchema>;
 export type B2bSalesHistory = typeof b2bSalesHistory.$inferSelect;
+
+// ── Exhibition SKU Interests (imported from EXHIBITION-SKU-DIGL.xlsx) ──────
+
+export const exhibitionSkuInterests = pgTable("exhibition_sku_interests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  exhibitionName: text("exhibition_name").notNull(),
+  customerName: text("customer_name"),
+  styleCode: text("style_code"),
+  jewelCode: text("jewel_code"),
+  parentStyleCode: text("parent_style_code"),
+  category: text("category"),
+  makeType: text("make_type"),
+  grossWt: text("gross_wt"),
+  pureWt: text("pure_wt"),
+  tagPrice: integer("tag_price"),
+  salesPersonName: text("sales_person_name"),
+  baseMetal: text("base_metal"),
+  source: text("source").notNull().default("b2b"), // "b2b" | "b2c"
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertExhibitionSkuInterestSchema = createInsertSchema(exhibitionSkuInterests).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertExhibitionSkuInterest = z.infer<typeof insertExhibitionSkuInterestSchema>;
+export type ExhibitionSkuInterest = typeof exhibitionSkuInterests.$inferSelect;

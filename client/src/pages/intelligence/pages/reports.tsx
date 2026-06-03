@@ -4,6 +4,7 @@ import { fmt, fmtN, ageTagClass, downloadCSV, getPriceBand } from "../lib/intell
 import { REPORT_DEFS, MONTH_NAMES, AGEING_RANGES } from "../lib/intelligence-constants";
 import { cn } from "@/lib/utils";
 import type { InventoryItem, SalesTransaction, MemoItem } from "../lib/intelligence-types";
+import * as XLSX from "xlsx";
 
 type ReportKey = keyof typeof REPORT_DEFS;
 
@@ -40,7 +41,7 @@ function SummaryBar({ stats }: { stats: SummaryStat[] }) {
           </p>
           <p
             className="text-xl tabular-nums"
-            style={{ fontFamily: "'Cormorant Garamond', serif", color: "#1A1814" }}
+            style={{ fontFamily: "'Jost', sans-serif", color: "#1A1814" }}
           >
             {s.value}
           </p>
@@ -243,7 +244,7 @@ function AgeingReport() {
     for (const item of inventory) {
       if (item.status !== "On Hand") continue;
       const loc = item.location;
-      if (!map.has(loc)) map.set(loc, { Fresh: 0, Watch: 0, Slow: 0, "Dead Stock": 0 });
+      if (!map.has(loc)) map.set(loc, { Fresh: 0, Active: 0, Moderate: 0, "Slow Moving": 0, Ageing: 0, "Non-Moving": 0 });
       const entry = map.get(loc)!;
       entry[item.ageingTag] = (entry[item.ageingTag] || 0) + 1;
     }
@@ -262,9 +263,11 @@ function AgeingReport() {
   const locCols: TableColumn[] = [
     { header: "Location", accessor: (r) => String(r.location) },
     { header: "Fresh", accessor: (r) => fmtN(r.Fresh as number), align: "right" },
-    { header: "Watch", accessor: (r) => fmtN(r.Watch as number), align: "right" },
-    { header: "Slow", accessor: (r) => fmtN(r.Slow as number), align: "right" },
-    { header: "Dead Stock", accessor: (r) => fmtN(r["Dead Stock"] as number), align: "right" },
+    { header: "Active", accessor: (r) => fmtN(r.Active as number), align: "right" },
+    { header: "Moderate", accessor: (r) => fmtN(r.Moderate as number), align: "right" },
+    { header: "Slow Moving", accessor: (r) => fmtN(r["Slow Moving"] as number), align: "right" },
+    { header: "Ageing", accessor: (r) => fmtN(r.Ageing as number), align: "right" },
+    { header: "Non-Moving", accessor: (r) => fmtN(r["Non-Moving"] as number), align: "right" },
   ];
 
   return (
@@ -274,7 +277,7 @@ function AgeingReport() {
           { label: "Total On-Hand", value: String(totalCount) },
           { label: "Total Cost", value: fmt(totalCost) },
           { label: "Total Tag", value: fmt(totalTag) },
-          { label: "Dead Stock %", value: totalCount ? ((buckets.find((b) => b["Ageing Tag"] === "Dead Stock")?.count || 0) / totalCount * 100).toFixed(1) + "%" : "---" },
+          { label: "Non-Moving %", value: totalCount ? ((buckets.find((b) => (b["Ageing Tag"] as string) === "Non-Moving")?.count || 0) / totalCount * 100).toFixed(1) + "%" : "---" },
         ]}
       />
       <div className="mb-4">
@@ -574,9 +577,9 @@ function ChannelReport() {
                     {fmtN(ch.count)}
                   </td>
                   <td className="px-3 py-2 border-b border-[#EDE7D8]" style={{ minWidth: 120 }}>
-                    <div className="w-full bg-[#F5F1E8] rounded-full h-2">
+                    <div className="w-full bg-[#F5F1E8] rounded-[4px] h-[7px]">
                       <div
-                        className="h-2 rounded-full"
+                        className="h-[7px] rounded-[4px]"
                         style={{ width: barWidth + "%", backgroundColor: "#C9A84C" }}
                       />
                     </div>
@@ -667,9 +670,9 @@ function MonthlyReport() {
                   {r.vsAvg >= 0 ? "+" : ""}{r.vsAvg.toFixed(1)}%
                 </td>
                 <td className="px-3 py-2 border-b border-[#EDE7D8]" style={{ minWidth: 120 }}>
-                  <div className="w-full bg-[#F5F1E8] rounded-full h-2">
+                  <div className="w-full bg-[#F5F1E8] rounded-[4px] h-[7px]">
                     <div
-                      className="h-2 rounded-full"
+                      className="h-[7px] rounded-[4px]"
                       style={{ width: r.barWidth + "%", backgroundColor: r.vsAvg >= 0 ? "#4A7C59" : "#D4721E" }}
                     />
                   </div>
@@ -763,8 +766,8 @@ function BdmPerfReport() {
                   <td className="px-3 py-2 text-[12.5px] border-b border-[#EDE7D8] text-right" style={{ color: "#3D3830" }}>{memo ? fmtN(memo.count) : "---"}</td>
                   <td className="px-3 py-2 text-[12.5px] border-b border-[#EDE7D8] text-right" style={{ color: "#3D3830" }}>{memo ? fmt(memo.value) : "---"}</td>
                   <td className="px-3 py-2 border-b border-[#EDE7D8]" style={{ minWidth: 100 }}>
-                    <div className="w-full bg-[#F5F1E8] rounded-full h-2">
-                      <div className="h-2 rounded-full" style={{ width: barWidth + "%", backgroundColor: "#C9A84C" }} />
+                    <div className="w-full bg-[#F5F1E8] rounded-[4px] h-[7px]">
+                      <div className="h-[7px] rounded-[4px]" style={{ width: barWidth + "%", backgroundColor: "#C9A84C" }} />
                     </div>
                   </td>
                 </tr>
@@ -982,6 +985,13 @@ function ExportBar({
 }) {
   const handleCSV = () => downloadCSV(filename, headers, rows);
   const handlePrint = () => window.print();
+  const handleExcel = () => {
+    const wsData = [headers, ...rows];
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Report");
+    XLSX.writeFile(wb, filename.replace(".csv", ".xlsx"));
+  };
 
   return (
     <div className="flex items-center gap-3 mt-4 pt-4 border-t border-[#EDE7D8]">
@@ -991,6 +1001,13 @@ function ExportBar({
         style={{ fontFamily: "'DM Mono', monospace" }}
       >
         Export CSV
+      </button>
+      <button
+        onClick={handleExcel}
+        className="px-4 py-1.5 text-[11px] border border-[#4A7C59] rounded-md bg-[#E8F5EC] text-[#2D6B42] hover:bg-[#D0E8D5] transition-colors"
+        style={{ fontFamily: "'DM Mono', monospace" }}
+      >
+        Export Excel
       </button>
       <button
         onClick={handlePrint}
@@ -1009,6 +1026,10 @@ function ExportBar({
 
 export default function ReportsPage() {
   const [selectedReport, setSelectedReport] = useState<ReportKey | null>(null);
+  const [gpMin, setGpMin] = useState<string>("");
+  const [gpMax, setGpMax] = useState<string>("");
+  const [dateFrom, setDateFrom] = useState<string>("");
+  const [dateTo, setDateTo] = useState<string>("");
 
   const reportKeys = Object.keys(REPORT_DEFS) as ReportKey[];
 
@@ -1043,8 +1064,9 @@ export default function ReportsPage() {
 
   return (
     <div>
+      <div style={{ height: 2, background: "linear-gradient(90deg, #C9A84C, transparent)", marginBottom: 20, borderRadius: 1 }} />
       {/* Report cards grid */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-4 gap-[14px] mb-6">
         {reportKeys.map((key) => {
           const def = REPORT_DEFS[key];
           const isActive = selectedReport === key;
@@ -1053,7 +1075,7 @@ export default function ReportsPage() {
               key={key}
               onClick={() => setSelectedReport(key)}
               className={cn(
-                "bg-white border rounded-lg p-5 cursor-pointer text-left transition",
+                "bg-white border rounded-lg p-[18px] cursor-pointer text-left transition",
                 "hover:border-[#C9A84C] hover:shadow",
                 isActive
                   ? "border-[#C9A84C] bg-[rgba(201,168,76,0.05)]"
@@ -1063,7 +1085,7 @@ export default function ReportsPage() {
               <span className="text-2xl mb-2 block">{def.icon}</span>
               <p
                 className="text-[15px] font-medium mb-1"
-                style={{ fontFamily: "'Cormorant Garamond', serif", color: "#1A1814" }}
+                style={{ fontFamily: "'Jost', sans-serif", color: "#1A1814" }}
               >
                 {def.title}
               </p>
@@ -1082,12 +1104,12 @@ export default function ReportsPage() {
       {selectedReport ? (
         <div className="bg-white border border-[#D4C9A8] rounded-lg overflow-hidden">
           {/* Title bar */}
-          <div className="flex items-center justify-between px-5 py-3 border-b border-[#D4C9A8] bg-[#FAF7F0]">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-[#D4C9A8] bg-white">
             <div className="flex items-center gap-3">
               <span className="text-xl">{REPORT_DEFS[selectedReport].icon}</span>
               <h3
                 className="text-lg font-semibold"
-                style={{ fontFamily: "'Cormorant Garamond', serif", color: "#1A1814" }}
+                style={{ fontFamily: "'Jost', sans-serif", color: "#1A1814" }}
               >
                 {REPORT_DEFS[selectedReport].title}
               </h3>
@@ -1101,11 +1123,66 @@ export default function ReportsPage() {
             </button>
           </div>
 
+          {/* Filter toolbar */}
+          <div className="flex items-center gap-3 px-5 py-2.5 border-b border-[#EDE7D8] bg-[#FAFAF5]">
+            <span className="text-[9px] uppercase tracking-[1.5px] text-[#6B6458] mr-1" style={{ fontFamily: "'DM Mono', monospace" }}>
+              Filters
+            </span>
+            <div className="flex items-center gap-1.5">
+              <label className="text-[10px] text-[#6B6458]" style={{ fontFamily: "'DM Mono', monospace" }}>GP%</label>
+              <input
+                type="number"
+                placeholder="Min"
+                value={gpMin}
+                onChange={(e) => setGpMin(e.target.value)}
+                className="w-[60px] h-7 text-[11px] px-2 border border-[#D4C9A8] rounded bg-white focus:border-[#C9A84C] focus:outline-none"
+                style={{ fontFamily: "'DM Mono', monospace" }}
+              />
+              <span className="text-[10px] text-[#6B6458]">–</span>
+              <input
+                type="number"
+                placeholder="Max"
+                value={gpMax}
+                onChange={(e) => setGpMax(e.target.value)}
+                className="w-[60px] h-7 text-[11px] px-2 border border-[#D4C9A8] rounded bg-white focus:border-[#C9A84C] focus:outline-none"
+                style={{ fontFamily: "'DM Mono', monospace" }}
+              />
+            </div>
+            <div className="w-px h-5 bg-[#D4C9A8]" />
+            <div className="flex items-center gap-1.5">
+              <label className="text-[10px] text-[#6B6458]" style={{ fontFamily: "'DM Mono', monospace" }}>Date</label>
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="h-7 text-[11px] px-2 border border-[#D4C9A8] rounded bg-white focus:border-[#C9A84C] focus:outline-none"
+                style={{ fontFamily: "'DM Mono', monospace" }}
+              />
+              <span className="text-[10px] text-[#6B6458]">to</span>
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="h-7 text-[11px] px-2 border border-[#D4C9A8] rounded bg-white focus:border-[#C9A84C] focus:outline-none"
+                style={{ fontFamily: "'DM Mono', monospace" }}
+              />
+            </div>
+            {(gpMin || gpMax || dateFrom || dateTo) && (
+              <button
+                onClick={() => { setGpMin(""); setGpMax(""); setDateFrom(""); setDateTo(""); }}
+                className="text-[10px] text-[#A63C2A] hover:text-[#A63C2A]/80 ml-auto"
+                style={{ fontFamily: "'DM Mono', monospace" }}
+              >
+                Clear Filters
+              </button>
+            )}
+          </div>
+
           {/* Report content */}
           <div>{renderReport(selectedReport)}</div>
         </div>
       ) : (
-        <div className="flex items-center justify-center h-40 rounded-lg border border-dashed border-[#E8E0D0]">
+        <div className="flex items-center justify-center h-40 rounded-lg border border-dashed border-[#D4C9A8]">
           <p
             className="text-[#1A1814]/40 text-sm"
             style={{ fontFamily: "'DM Mono', monospace" }}

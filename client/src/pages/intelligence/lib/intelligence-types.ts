@@ -12,7 +12,7 @@ export interface InventoryItem {
   tagPrice: number;
   gp: number;
   ageingDays: number;
-  ageingTag: "Fresh" | "Watch" | "Slow" | "Dead Stock";
+  ageingTag: "Fresh" | "Active" | "Moderate" | "Slow Moving" | "Ageing" | "Non-Moving";
   perfTag: "Top Seller" | "Fast Moving" | "Average" | "Slow";
   grossWt: number;
   pureWt: number;
@@ -282,7 +282,7 @@ export interface ExhibitionSku {
   bdm: string[];
 }
 
-export type PageId = "dashboard" | "inventory" | "skuintel" | "sales" | "clients" | "assortment" | "catalogue" | "dispatch" | "lonepieces" | "recommendations" | "reports";
+export type PageId = "dashboard" | "inventory" | "inventory_suggestions" | "skuintel" | "sales" | "clients" | "assortment" | "catalogue" | "dispatch" | "lonepieces" | "recommendations" | "reports";
 
 export interface DashFilter {
   type: string | null;
@@ -295,7 +295,7 @@ export interface KitItem extends InventoryItem {
 
 export interface DispatchKit {
   id: string;
-  kind: "bdm" | "exhibition" | "transfer";
+  kind: "bdm" | "exhibition" | "transfer" | "location";
   bdm: string;
   state: string | null;
   targetClient: string | null;
@@ -328,6 +328,11 @@ export interface HighMarginItem {
   imageUrl: string;
 }
 
+export interface AssortReason {
+  tag: string;
+  text: string;
+}
+
 export interface AssortSuggestion {
   jc: string;
   styleNo: string;
@@ -343,6 +348,12 @@ export interface AssortSuggestion {
   imageUrl: string;
   stockType: string;
   score: number;
-  reasons: string[];
+  reasons: AssortReason[];
   thumbUrl: string;
+  perfTag?: string;
+  tier?: "MUST INCLUDE" | "RECOMMENDED" | "OPTIONAL";
+  pureWt?: number;
+  location?: string;
+  catSimple?: string;
+  targetClient?: string;
 }

@@ -32,8 +32,8 @@ interface Recommendation {
 function deriveRecommendationTags(item: InventoryItem): string[] {
   const tags: string[] = [];
 
-  /* clearance: dead stock or very high ageing */
-  if (item.ageingTag === "Dead Stock" || item.ageingDays > 365) {
+  /* clearance: non-moving, ageing, or slow moving */
+  if (item.ageingTag === "Non-Moving" || item.ageingTag === "Ageing" || item.ageingTag === "Slow Moving" || item.ageingDays > 270) {
     tags.push("Clearance");
   }
 
@@ -43,13 +43,13 @@ function deriveRecommendationTags(item: InventoryItem): string[] {
   }
 
   /* slow mover */
-  if (item.perfTag === "Slow" && item.ageingTag !== "Dead Stock") {
+  if (item.perfTag === "Slow" && item.ageingTag !== "Non-Moving") {
     tags.push("Slow Mover");
   }
 
-  /* watch */
-  if (item.ageingTag === "Watch") {
-    tags.push("Watch");
+  /* slow moving */
+  if (item.ageingTag === "Slow Moving") {
+    tags.push("Slow Moving");
   }
 
   /* high margin: GP >= 45% */
@@ -124,7 +124,7 @@ type FilterType =
   | "Slow Mover"
   | "Demand Gap"
   | "Repeat Buyer"
-  | "Watch"
+  | "Slow Moving"
   | "High Margin";
 
 type SortType = "Ageing" | "GP%" | "Value";
@@ -152,14 +152,14 @@ function RecCard({ rec, isInKit, onAddToKit }: { rec: Recommendation; isInKit: b
       {/* rank */}
       <div
         className="text-[22px] text-[#C9A84C] w-7 text-center flex-shrink-0 pt-0.5"
-        style={{ fontFamily: "'Cormorant Garamond', serif", fontWeight: 700 }}
+        style={{ fontFamily: "'Jost', sans-serif", fontWeight: 400 }}
       >
         {rec.rank}
       </div>
 
       {/* thumbnail (if available) */}
       {thumbUrl && (
-        <div className="w-14 h-14 rounded border border-[#E8E0D0] overflow-hidden flex-shrink-0 bg-[#FAF7F0]">
+        <div className="w-14 h-14 rounded border border-[#D4C9A8] overflow-hidden flex-shrink-0 bg-white">
           <img
             src={thumbUrl}
             alt={rec.styleNo}
@@ -194,7 +194,7 @@ function RecCard({ rec, isInKit, onAddToKit }: { rec: Recommendation; isInKit: b
             <span
               key={tag}
               className={cn(
-                "text-[10px] px-1.5 py-0.5 rounded font-medium",
+                "text-[10.5px] px-2 py-[2px] rounded-[20px] font-medium",
                 recTagClass(tag)
               )}
             >
@@ -238,7 +238,7 @@ function RecCard({ rec, isInKit, onAddToKit }: { rec: Recommendation; isInKit: b
             "flex items-center gap-1",
             isInKit
               ? "border-[#4A7C59] bg-[#E8F5EC] text-[#2D6B42]"
-              : "border-[#D4C9A8] text-[#8B6914] hover:bg-[#FAF7F0]"
+              : "border-[#D4C9A8] text-[#8B6914] hover:bg-[#F5F1E8]"
           )}
           title={isInKit ? "Added to kit" : "Add to dispatch kit"}
         >
@@ -278,7 +278,7 @@ function shortenLocation(loc: string): string {
 function liveToInventoryItem(item: LiveStockItem): InventoryItem {
   const ageingDays = item.ageingDays;
   const ageingTag: InventoryItem["ageingTag"] =
-    ageingDays <= 90 ? "Fresh" : ageingDays <= 180 ? "Watch" : ageingDays <= 365 ? "Slow" : "Dead Stock";
+    ageingDays <= 30 ? "Fresh" : ageingDays <= 60 ? "Active" : ageingDays <= 90 ? "Moderate" : ageingDays <= 180 ? "Slow Moving" : ageingDays <= 270 ? "Ageing" : "Non-Moving";
   return {
     jewelCode: item.jewelCode,
     styleNo: item.styleNo ?? "",
@@ -418,7 +418,7 @@ export default function Recommendations() {
         tagPrice: rec.tagPrice,
         gp: rec.gp,
         ageingDays: rec.ageingDays,
-        ageingTag: rec.ageingTag as "Fresh" | "Watch" | "Slow" | "Dead Stock",
+        ageingTag: rec.ageingTag as "Fresh" | "Active" | "Moderate" | "Slow Moving" | "Ageing" | "Non-Moving",
         perfTag: rec.perfTag as "Top Seller" | "Fast Moving" | "Average" | "Slow",
         grossWt: 0,
         pureWt: 0,
@@ -435,7 +435,7 @@ export default function Recommendations() {
       ? items.reduce((sum, i) => sum + i.gp, 0) / items.length
       : 0;
 
-    const deadStockCleared = items.filter((i) => i.ageingTag === "Dead Stock").length;
+    const deadStockCleared = items.filter((i) => i.ageingTag === "Slow Moving" || i.ageingTag === "Ageing" || i.ageingTag === "Non-Moving").length;
 
     const kit: DispatchKit = {
       id: kitId,
@@ -483,6 +483,7 @@ export default function Recommendations() {
 
   return (
     <div className="space-y-6">
+      <div style={{ height: 2, background: "linear-gradient(90deg, #C9A84C, transparent)", marginBottom: 20, borderRadius: 1 }} />
       {/* ---------- filter bar ---------- */}
       <div className="flex items-center gap-3 flex-wrap">
         {/* type filter */}
@@ -497,7 +498,7 @@ export default function Recommendations() {
             value={filterType}
             onChange={(e) => setFilterType(e.target.value as FilterType)}
             className={cn(
-              "h-8 px-2.5 rounded-md border border-[#E8E0D0] bg-white",
+              "h-8 px-2.5 rounded-md border border-[#D4C9A8] bg-white",
               "text-[12px] text-[#3D3830]",
               "focus:outline-none focus:ring-1 focus:ring-[#C9A84C]/40"
             )}
@@ -527,7 +528,7 @@ export default function Recommendations() {
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value as SortType)}
             className={cn(
-              "h-8 px-2.5 rounded-md border border-[#E8E0D0] bg-white",
+              "h-8 px-2.5 rounded-md border border-[#D4C9A8] bg-white",
               "text-[12px] text-[#3D3830]",
               "focus:outline-none focus:ring-1 focus:ring-[#C9A84C]/40"
             )}
@@ -562,7 +563,7 @@ export default function Recommendations() {
           ))}
         </div>
       ) : (
-        <div className="flex items-center justify-center h-40 rounded-lg border border-dashed border-[#E8E0D0] bg-white">
+        <div className="flex items-center justify-center h-40 rounded-lg border border-dashed border-[#D4C9A8] bg-white">
           <p className="text-[13px] text-[#6B6458]/50">
             No recommendations for this filter
           </p>
@@ -583,13 +584,13 @@ export default function Recommendations() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setKitItems(new Set())}
-              className="px-4 py-2 border border-[#D4C9A8] text-[13px] text-[#6B6458] rounded-lg hover:bg-[#FAF8F5] transition-colors"
+              className="px-4 py-2 border border-[#D4C9A8] text-[13px] text-[#6B6458] rounded-lg hover:bg-[#F5F1E8] transition-colors"
             >
               Clear
             </button>
             <button
               onClick={handleSendKit}
-              className="px-5 py-2 bg-[#C9A84C] text-white text-[13px] font-semibold rounded-lg hover:bg-[#B8972F] transition-colors"
+              className="px-5 py-2 bg-[#C9A84C] text-white text-[13px] font-semibold rounded-lg hover:bg-[#8B6914] transition-colors"
             >
               Send Kit for Approval
             </button>

@@ -11,6 +11,7 @@ import DispatchPage from "./pages/dispatch";
 import LonePiecesPage from "./pages/lone-pieces";
 import RecommendationsPage from "./pages/recommendations";
 import ReportsPage from "./pages/reports";
+import InventorySuggestionsPage from "./pages/inventory-suggestions";
 
 function IntelligenceContent() {
   const { activePage } = useIntelligence();
@@ -20,6 +21,8 @@ function IntelligenceContent() {
       return <DashboardPage />;
     case "inventory":
       return <InventoryPage />;
+    case "inventory_suggestions":
+      return <InventorySuggestionsPage />;
     case "skuintel":
       return <SkuIntelPage />;
     case "sales":

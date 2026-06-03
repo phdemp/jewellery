@@ -62,7 +62,7 @@ function toInventoryItem(item: InvItem): InventoryItem {
 function liveToInventoryItem(item: LiveStockItem): InventoryItem {
   const ageingDays = item.ageingDays;
   const ageingTag: InventoryItem["ageingTag"] =
-    ageingDays <= 90 ? "Fresh" : ageingDays <= 180 ? "Watch" : ageingDays <= 365 ? "Slow" : "Dead Stock";
+    ageingDays <= 30 ? "Fresh" : ageingDays <= 60 ? "Active" : ageingDays <= 90 ? "Moderate" : ageingDays <= 180 ? "Slow Moving" : ageingDays <= 270 ? "Ageing" : "Non-Moving";
   return {
     jewelCode: item.jewelCode,
     styleNo: item.styleNo ?? "",
@@ -217,7 +217,7 @@ export default function LonePiecesPage() {
     [filtered]
   );
   const deadCount = useMemo(
-    () => filtered.filter((o) => o.item.ageingTag === "Dead Stock").length,
+    () => filtered.filter((o) => o.item.ageingTag === "Slow Moving" || o.item.ageingTag === "Ageing" || o.item.ageingTag === "Non-Moving").length,
     [filtered]
   );
 
@@ -231,6 +231,7 @@ export default function LonePiecesPage() {
 
   return (
     <div>
+      <div style={{ height: 2, background: "linear-gradient(90deg, #C9A84C, transparent)", marginBottom: 20, borderRadius: 1 }} />
       {/* Header summary */}
       <div className="grid grid-cols-4 gap-4 mb-6">
         <div className="bg-white border border-[#D4C9A8] rounded-lg p-4">
@@ -292,7 +293,7 @@ export default function LonePiecesPage() {
               className={cn(
                 "px-3 py-1.5 text-[12px] capitalize transition-colors",
                 view === v
-                  ? "bg-[#C9A84C] text-white"
+                  ? "bg-[#C9A84C] text-[#1A1814]"
                   : "bg-white text-[#3D3830] hover:bg-[#F5F1E8]"
               )}
               style={{ fontFamily: "'DM Mono', monospace" }}
@@ -339,7 +340,7 @@ export default function LonePiecesPage() {
 
       {/* Grid */}
       {filtered.length === 0 ? (
-        <div className="flex items-center justify-center h-40 rounded-lg border border-dashed border-[#E8E0D0]">
+        <div className="flex items-center justify-center h-40 rounded-lg border border-dashed border-[#D4C9A8]">
           <p
             className="text-[#1A1814]/40 text-sm"
             style={{ fontFamily: "'DM Mono', monospace" }}
@@ -367,9 +368,9 @@ function OrphanCardComponent({ orphan }: { orphan: OrphanCard }) {
   const category = prettyCatForItem(item);
 
   const ageBadgeCls =
-    item.ageingTag === "Dead Stock"
+    item.ageingTag === "Non-Moving" || item.ageingTag === "Ageing"
       ? "bg-[#FDEAEA] text-[#8B1A1A]"
-      : item.ageingTag === "Slow"
+      : item.ageingTag === "Slow Moving"
         ? "bg-[#FFF4E0] text-[#8B5E00]"
         : "bg-[#F5F1E8] text-[#3D3830]";
 

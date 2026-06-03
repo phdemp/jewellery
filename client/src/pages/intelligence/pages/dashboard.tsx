@@ -57,7 +57,7 @@ function IntelPieChart({
   return (
     <div className="bg-white border border-[#D4C9A8] rounded-lg p-5 shadow-sm">
       <h3
-        className="text-[15px] font-semibold mb-4"
+        className="text-[16px] font-medium mb-4"
         style={{ color: CHARCOAL, fontFamily: "'Cormorant Garamond', serif" }}
       >
         {title}
@@ -381,6 +381,7 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      <div style={{ height: 2, background: "linear-gradient(90deg, #C9A84C, transparent)", marginBottom: 20, borderRadius: 1 }} />
       {/* ── Stat Cards ── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
@@ -481,7 +482,7 @@ export default function DashboardPage() {
 
         <div className="bg-white border border-[#D4C9A8] rounded-lg p-5 shadow-sm">
           <h3
-            className="text-[15px] font-semibold mb-4"
+            className="text-[16px] font-medium mb-4"
             style={{ color: CHARCOAL, fontFamily: "'Cormorant Garamond', serif" }}
           >
             Monthly Revenue (FY 2025-26)
@@ -545,7 +546,7 @@ export default function DashboardPage() {
       {/* Net Sales by Category Table */}
       <div className="bg-white border border-[#D4C9A8] rounded-lg p-5 shadow-sm">
         <h3
-          className="text-[15px] font-semibold mb-4"
+          className="text-[16px] font-medium mb-4"
           style={{ color: CHARCOAL, fontFamily: "'Cormorant Garamond', serif" }}
         >
           Net Sales by Category
@@ -553,20 +554,20 @@ export default function DashboardPage() {
         <div className="overflow-x-auto">
           <table className="w-full text-[12px]" style={{ fontFamily: "'DM Mono', monospace" }}>
             <thead>
-              <tr className="border-b" style={{ borderColor: BORDER }}>
-                <th className="text-left py-2 pr-4 font-medium text-[10px] tracking-[1px] uppercase" style={{ color: WARM_GREY }}>
+              <tr className="border-b" style={{ borderColor: BORDER, backgroundColor: "#F5F1E8" }}>
+                <th className="text-left py-2 pr-4 font-medium text-[9.5px] tracking-[1.5px] uppercase" style={{ color: WARM_GREY }}>
                   Category
                 </th>
-                <th className="text-right py-2 px-3 font-medium text-[10px] tracking-[1px] uppercase" style={{ color: WARM_GREY }}>
+                <th className="text-right py-2 px-3 font-medium text-[9.5px] tracking-[1.5px] uppercase" style={{ color: WARM_GREY }}>
                   Gross Sales
                 </th>
-                <th className="text-right py-2 px-3 font-medium text-[10px] tracking-[1px] uppercase" style={{ color: WARM_GREY }}>
+                <th className="text-right py-2 px-3 font-medium text-[9.5px] tracking-[1.5px] uppercase" style={{ color: WARM_GREY }}>
                   Returns
                 </th>
-                <th className="text-right py-2 px-3 font-medium text-[10px] tracking-[1px] uppercase" style={{ color: WARM_GREY }}>
+                <th className="text-right py-2 px-3 font-medium text-[9.5px] tracking-[1.5px] uppercase" style={{ color: WARM_GREY }}>
                   Return %
                 </th>
-                <th className="text-right py-2 pl-3 font-medium text-[10px] tracking-[1px] uppercase" style={{ color: WARM_GREY }}>
+                <th className="text-right py-2 pl-3 font-medium text-[9.5px] tracking-[1.5px] uppercase" style={{ color: WARM_GREY }}>
                   Net Sales
                 </th>
               </tr>
@@ -575,10 +576,10 @@ export default function DashboardPage() {
               {netSalesTable.map((row) => (
                 <tr
                   key={row.category}
-                  className="border-b last:border-0 hover:bg-[#FAF7F0] transition-colors"
-                  style={{ borderColor: BORDER + "60" }}
+                  className="border-b last:border-0 hover:bg-[#F5F1E8] transition-colors"
+                  style={{ borderColor: "#EDE7D8" }}
                 >
-                  <td className="py-2.5 pr-4" style={{ color: CHARCOAL, fontFamily: "'Inter', sans-serif", fontSize: 12 }}>
+                  <td className="py-2.5 pr-4" style={{ color: CHARCOAL, fontFamily: "'Jost', sans-serif", fontSize: 12 }}>
                     {row.category}
                   </td>
                   <td className="text-right py-2.5 px-3 tabular-nums" style={{ color: CHARCOAL }}>
@@ -603,28 +604,28 @@ export default function DashboardPage() {
       {/* ── Action Alerts ── */}
       <div>
         <h3
-          className="text-[15px] font-semibold mb-3"
+          className="text-[16px] font-medium mb-3"
           style={{ color: CHARCOAL, fontFamily: "'Cormorant Garamond', serif" }}
         >
           Action Alerts
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <AlertCard
-            title="Dead Stock"
+            title="Non-Moving"
             count={deadStockCount}
-            description="Items aged 365+ days"
+            description="Items aged 270+ days"
             color={RED}
             icon={<AlertTriangle className="w-5 h-5" />}
-            actionLabel="Review Dead Stock"
+            actionLabel="Review Non-Moving"
             onAction={() => setActivePage("skuintel")}
           />
           <AlertCard
-            title="Slow Movers"
-            count={DATA.ageing.find((a) => a["Ageing Tag"] === "Slow")?.count ?? 0}
-            description="Items aged 181-365 days"
+            title="Slow Moving"
+            count={DATA.ageing.find((a) => (a["Ageing Tag"] as string) === "Slow Moving")?.count ?? 0}
+            description="Items aged 91-180 days"
             color={AMBER}
             icon={<TrendingDown className="w-5 h-5" />}
-            actionLabel="View Slow Movers"
+            actionLabel="View Slow Moving"
             onAction={() => setActivePage("inventory")}
           />
           <AlertCard

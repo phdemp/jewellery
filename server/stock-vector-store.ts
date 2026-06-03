@@ -40,10 +40,10 @@ export async function searchSimilarStockItems(
       category,
       tag_price as "tagPrice",
       status,
-      1 - (embedding_vector <=> '${vectorStr}'::vector) as similarity
+      1 - (embedding_vector::halfvec(3072) <=> '${vectorStr}'::halfvec(3072)) as similarity
     FROM stock_items
     WHERE ${whereClause}
-    ORDER BY embedding_vector <=> '${vectorStr}'::vector
+    ORDER BY embedding_vector::halfvec(3072) <=> '${vectorStr}'::halfvec(3072)
     LIMIT ${topK}
   `));
 

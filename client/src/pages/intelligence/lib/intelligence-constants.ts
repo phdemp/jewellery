@@ -6,9 +6,11 @@ export const PIE_COLORS = [
 
 export const AGEING_COLORS: Record<string, string> = {
   Fresh: "#4A7C59",
-  Watch: "#C4862B",
-  Slow: "#D4721E",
-  "Dead Stock": "#A63C2A",
+  Active: "#2B5EA7",
+  Moderate: "#C4862B",
+  "Slow Moving": "#D4721E",
+  Ageing: "#A63C2A",
+  "Non-Moving": "#8B1A1A",
 };
 
 export const PAGE_TITLES: Record<string, string> = {
@@ -23,6 +25,7 @@ export const PAGE_TITLES: Record<string, string> = {
   lonepieces: "Lone Pieces",
   recommendations: "Recommendations",
   reports: "Reports & Analytics",
+  inventory_suggestions: "Inventory Suggestions",
 };
 
 export const REPORT_DEFS: Record<string, { title: string; icon: string; desc: string }> = {
@@ -57,10 +60,12 @@ export const MONTH_NAMES: Record<string, string> = {
 export const SHORT_MONTHS = ["Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar"];
 
 export const AGEING_RANGES: Record<string, string> = {
-  Fresh: "0–90 days",
-  Watch: "91–180 days",
-  Slow: "181–365 days",
-  "Dead Stock": "365+ days",
+  Fresh: "0–30 days",
+  Active: "31–60 days",
+  Moderate: "61–90 days",
+  "Slow Moving": "91–180 days",
+  Ageing: "181–270 days",
+  "Non-Moving": "270+ days",
 };
 
 export const ORPHAN_PAIRS: Record<string, string> = {

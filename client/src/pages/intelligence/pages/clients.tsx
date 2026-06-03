@@ -16,18 +16,18 @@ interface StatCardProps {
 
 function StatCard({ label, value, sub, icon }: StatCardProps) {
   return (
-    <div className="rounded-lg border border-[#E8E0D0] bg-white p-5">
+    <div className="rounded-lg border border-[#D4C9A8] bg-white p-5">
       <div className="flex items-start justify-between">
         <div>
           <p
-            className="text-[11px] tracking-[0.08em] text-[#6B6458] mb-1"
+            className="text-[9px] tracking-[1.8px] text-[#6B6458] mb-1"
             style={{ fontFamily: "'DM Mono', monospace" }}
           >
             {label}
           </p>
           <p
-            className="text-[22px] font-semibold text-[#1A1814]"
-            style={{ fontFamily: "'Cormorant Garamond', serif" }}
+            className="text-[30px] font-medium text-[#1A1814]"
+            style={{ fontFamily: "'Jost', sans-serif" }}
           >
             {value}
           </p>
@@ -38,7 +38,7 @@ function StatCard({ label, value, sub, icon }: StatCardProps) {
             {sub}
           </p>
         </div>
-        <div className="w-9 h-9 rounded-full bg-[#FAF7F0] flex items-center justify-center text-[#C9A84C]">
+        <div className="w-9 h-9 rounded-full bg-white flex items-center justify-center text-[#C9A84C]">
           {icon}
         </div>
       </div>
@@ -75,7 +75,7 @@ function ClientCard({
       <div className="flex items-start justify-between mb-2">
         <h4
           className="text-[15px] font-medium text-[#1A1814] leading-tight"
-          style={{ fontFamily: "'Cormorant Garamond', serif" }}
+          style={{ fontFamily: "'Jost', sans-serif" }}
         >
           {name}
         </h4>
@@ -124,7 +124,7 @@ function ClientCard({
             </span>
           ))}
           {topCats.length > 4 && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#F5F0E6] text-[#6B6458]">
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#F5F1E8] text-[#6B6458]">
               +{topCats.length - 4}
             </span>
           )}
@@ -132,7 +132,7 @@ function ClientCard({
       )}
 
       {/* last purchase */}
-      <div className="flex items-center justify-between pt-2 border-t border-[#F5F0E6]">
+      <div className="flex items-center justify-between pt-2 border-t border-[#F5F1E8]">
         <span
           className="text-[11.5px] text-[#6B6458]"
           style={{ fontFamily: "'DM Mono', monospace" }}
@@ -205,6 +205,7 @@ export default function ClientProfiles() {
 
   return (
     <div className="space-y-6">
+      <div style={{ height: 2, background: "linear-gradient(90deg, #C9A84C, transparent)", marginBottom: 20, borderRadius: 1 }} />
       {/* ---------- stat cards ---------- */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
@@ -236,7 +237,7 @@ export default function ClientProfiles() {
       {/* ---------- tabs + search ---------- */}
       <div className="flex items-center justify-between">
         {/* tabs */}
-        <div className="flex items-center gap-1 p-1 rounded-lg bg-[#F5F0E6] border border-[#E8E0D0]">
+        <div className="flex items-center gap-1 p-1 rounded-lg bg-[#F5F1E8] border border-[#D4C9A8]">
           <button
             onClick={() => {
               setActiveTab("all");
@@ -269,7 +270,7 @@ export default function ClientProfiles() {
                 "text-[10px] px-1.5 py-0 rounded-full",
                 activeTab === "cold"
                   ? "bg-[#E8F0FE] text-[#1A56CC]"
-                  : "bg-[#E8E0D0] text-[#6B6458]"
+                  : "bg-[#D4C9A8] text-[#6B6458]"
               )}
             >
               {coldCount}
@@ -289,7 +290,7 @@ export default function ClientProfiles() {
               setPage(1);
             }}
             className={cn(
-              "h-8 w-64 pl-8 pr-3 rounded-md border border-[#E8E0D0] bg-white",
+              "h-8 w-64 pl-8 pr-3 rounded-md border border-[#D4C9A8] bg-white",
               "text-[12px] text-[#3D3830] placeholder:text-[#6B6458]/40",
               "focus:outline-none focus:ring-1 focus:ring-[#C9A84C]/40"
             )}
@@ -315,7 +316,7 @@ export default function ClientProfiles() {
           ))}
         </div>
       ) : (
-        <div className="flex items-center justify-center h-40 rounded-lg border border-dashed border-[#E8E0D0] bg-white">
+        <div className="flex items-center justify-center h-40 rounded-lg border border-dashed border-[#D4C9A8] bg-white">
           <p className="text-[13px] text-[#6B6458]/50">No clients match your search</p>
         </div>
       )}
@@ -336,10 +337,10 @@ export default function ClientProfiles() {
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={safePage <= 1}
               className={cn(
-                "h-7 px-2.5 rounded text-[11px] border border-[#E8E0D0]",
+                "h-7 px-2.5 rounded text-[11px] border border-[#D4C9A8]",
                 safePage <= 1
                   ? "text-[#6B6458]/30 cursor-not-allowed"
-                  : "text-[#3D3830] hover:bg-[#FAF7F0]"
+                  : "text-[#3D3830] hover:bg-[#F5F1E8]"
               )}
             >
               Prev
@@ -362,8 +363,8 @@ export default function ClientProfiles() {
                   className={cn(
                     "h-7 w-7 rounded text-[11px] border",
                     safePage === pageNum
-                      ? "bg-[#C9A84C] text-white border-[#C9A84C]"
-                      : "border-[#E8E0D0] text-[#3D3830] hover:bg-[#FAF7F0]"
+                      ? "bg-[#C9A84C] text-[#1A1814] border-[#C9A84C]"
+                      : "border-[#D4C9A8] text-[#3D3830] hover:bg-[#F5F1E8]"
                   )}
                 >
                   {pageNum}
@@ -374,10 +375,10 @@ export default function ClientProfiles() {
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={safePage >= totalPages}
               className={cn(
-                "h-7 px-2.5 rounded text-[11px] border border-[#E8E0D0]",
+                "h-7 px-2.5 rounded text-[11px] border border-[#D4C9A8]",
                 safePage >= totalPages
                   ? "text-[#6B6458]/30 cursor-not-allowed"
-                  : "text-[#3D3830] hover:bg-[#FAF7F0]"
+                  : "text-[#3D3830] hover:bg-[#F5F1E8]"
               )}
             >
               Next

@@ -10,8 +10,13 @@ import {
   fetchB2bBdmList,
   fetchB2bStatesForBdm,
   fetchB2bClientsForBdm,
+  fetchStockCategories,
+  fetchExhibitionList,
+  generateExhibitionScore,
+  fetchLocations,
+  generateLocationScore,
 } from "@/lib/api";
-import type { AiScoredItem, AiScoreProfile, AiScoreBreakdown } from "@/lib/api";
+import type { AiScoredItem, AiScoreProfile, AiScoreBreakdown, ScoringWeights } from "@/lib/api";
 
 /* ── Modes matching the live HTML reference ── */
 type Mode = "client" | "location" | "bdmstate";
@@ -105,12 +110,17 @@ export default function AssortmentPlanner() {
   const [selectedClient, setSelectedClient] = useState("");
   const [kitSize, setKitSize] = useState(100);
   const [clearancePct, setClearancePct] = useState(30);
+  const [scoringWeights, setScoringWeights] = useState<ScoringWeights>({ visual: 60, attribute: 15, velocity: 15, ageing: 10 });
   const [metalWtMax, setMetalWtMax] = useState(100);
   const [selectedSegment, setSelectedSegment] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
   const [weightMin, setWeightMin] = useState("");
   const [weightMax, setWeightMax] = useState("");
   const [localGoldPrice, setLocalGoldPrice] = useState(goldPrice || 0);
+  /* ── Exhibition state ── */
+  const [selectedExhibition, setSelectedExhibition] = useState("all");
+  /* ── Location state ── */
+  const [selectedDestination, setSelectedDestination] = useState("");
   const [generated, setGenerated] = useState(false);
   const [decisions, setDecisions] = useState<DecisionState>({});
   const [detailItem, setDetailItem] = useState<AssortSuggestion | null>(null);
@@ -157,6 +167,22 @@ export default function AssortmentPlanner() {
   });
   const clientsForBdm = clientsData?.clients || [];
 
+  /* ── Exhibition list ── */
+  const { data: exhibitionListData } = useQuery({
+    queryKey: ["exhibition-list"],
+    queryFn: fetchExhibitionList,
+    enabled: mode === "client",
+  });
+  const exhibitions = exhibitionListData?.exhibitions || [];
+
+  /* ── Location list ── */
+  const { data: locationListData } = useQuery({
+    queryKey: ["location-list"],
+    queryFn: fetchLocations,
+    enabled: mode === "location",
+  });
+  const locations = locationListData?.locations || [];
+
   /* ── Fallback to static DATA when B2B not yet imported ── */
   const bdmStatesMap = DATA.bdmStates as Record<string, { name: string; states: readonly string[]; totalRevenue: number; txnCount: number }>;
   const fallbackBdmKeys = useMemo(() => Object.keys(bdmStatesMap), []);
@@ -168,30 +194,46 @@ export default function AssortmentPlanner() {
   const suggestions = useMemo((): AssortSuggestion[] => {
     if (!generated || aiItems.length === 0) return [];
 
-    let items: AssortSuggestion[] = aiItems.map((item) => ({
-      jc: item.jewelCode,
-      styleNo: item.styleNo,
-      cat: item.category,
-      catSimple: item.category,
-      costPrice: item.costPrice,
-      tagPrice: item.tagPrice,
-      gp: item.tagPrice > 0 ? ((item.tagPrice - item.costPrice) / item.tagPrice) * 100 : 0,
-      ageingDays: item.ageingDays,
-      ageTag: item.ageTag,
-      baseMetal: item.baseMetal,
-      grossWt: parseFloat(item.grossWt) || 0,
-      pureWt: parseFloat(item.pureWt) || 0,
-      diaWt: parseFloat(item.totDiaWt) || 0,
-      imageUrl: item.imageUrl,
-      stockType: item.stockType,
-      score: item.score,
-      reasons: item.reasons,
-      thumbUrl: item.imageUrl,
-      tier: item.tier || getTier(item.score) || undefined,
-      location: item.location,
-      scoreBreakdown: item.scoreBreakdown,
-      targetClient: item.targetClient,
-    }));
+    let items: AssortSuggestion[] = aiItems.map((item) => {
+      // Client-side re-score: breakdown values are raw 0-1 norms from server.
+      // Multiply each by the user's weight slider to get weighted total (0-100).
+      // Skip re-weighting for exhibition mode (breakdowns are zeroed, score is pre-computed).
+      const bd = item.scoreBreakdown;
+      let reweightedScore = item.score;
+      if (bd && mode === "bdmstate") {
+        reweightedScore = Math.round(
+          bd.visual * scoringWeights.visual +
+          bd.category * scoringWeights.attribute +
+          bd.price * scoringWeights.velocity +
+          bd.ageing * scoringWeights.ageing
+        );
+        reweightedScore = Math.max(0, Math.min(100, reweightedScore));
+      }
+      return {
+        jc: item.jewelCode,
+        styleNo: item.styleNo,
+        cat: item.category,
+        catSimple: item.category,
+        costPrice: item.costPrice,
+        tagPrice: item.tagPrice,
+        gp: item.tagPrice > 0 ? ((item.tagPrice - item.costPrice) / item.tagPrice) * 100 : 0,
+        ageingDays: item.ageingDays,
+        ageTag: item.ageTag,
+        baseMetal: item.baseMetal,
+        grossWt: parseFloat(item.grossWt) || 0,
+        pureWt: parseFloat(item.pureWt) || 0,
+        diaWt: parseFloat(item.totDiaWt) || 0,
+        imageUrl: item.imageUrl,
+        stockType: item.stockType,
+        score: reweightedScore,
+        reasons: item.reasons,
+        thumbUrl: item.imageUrl,
+        tier: getTier(reweightedScore) || undefined,
+        location: item.location,
+        scoreBreakdown: item.scoreBreakdown,
+        targetClient: item.targetClient,
+      };
+    });
 
     if (weightMin) {
       const min = parseFloat(weightMin);
@@ -238,14 +280,21 @@ export default function AssortmentPlanner() {
     }
 
     return items.slice(0, kitSize);
-  }, [generated, aiItems, kitSize, weightMin, weightMax, clearancePct, metalWtMax, selectedSegment, selectedCategory]);
+  }, [generated, aiItems, kitSize, weightMin, weightMax, clearancePct, metalWtMax, selectedSegment, selectedCategory, scoringWeights]);
 
-  /* ── Available categories from scored items ── */
+  /* ── Stock categories (pre-populated from live stock) ── */
+  const { data: stockCatsData } = useQuery({
+    queryKey: ["stock-categories"],
+    queryFn: fetchStockCategories,
+  });
+
+  /* ── Available categories: merge stock categories + scored item categories ── */
   const availableCategories = useMemo(() => {
-    if (aiItems.length === 0) return [];
-    const cats = new Set(aiItems.map((i) => i.category).filter(Boolean));
+    const cats = new Set<string>();
+    for (const c of stockCatsData?.categories || []) cats.add(c);
+    for (const i of aiItems) { if (i.category) cats.add(i.category); }
     return Array.from(cats).sort();
-  }, [aiItems]);
+  }, [aiItems, stockCatsData]);
 
   /* ── Section layout: Best Matches, Clearance, Segment Clusters ── */
   const sections = useMemo(() => {
@@ -367,19 +416,36 @@ export default function AssortmentPlanner() {
     }, 1000);
 
     try {
-      const result = await generateAiAssortmentScore({
-        bdmName: selectedBdm || "ALL",
-        stateName: selectedState || undefined,
-        clientName: selectedClient || undefined,
-        kitSize,
-        weightMin: weightMin ? Number(weightMin) : undefined,
-        weightMax: weightMax ? Number(weightMax) : undefined,
-      });
-
-      setAiItems(result.items);
-      setAiProfile(result.profile);
-      setAiTiming(result.timing);
-      setGenerated(true);
+      if (mode === "client") {
+        // Exhibition mode: use exhibition scoring endpoint
+        const result = await generateExhibitionScore(selectedExhibition, kitSize);
+        setAiItems(result.items);
+        setAiProfile(null);
+        setAiTiming(null);
+        setGenerated(true);
+      } else if (mode === "location") {
+        // Location mode: dedicated location scoring endpoint
+        const result = await generateLocationScore(selectedDestination, kitSize);
+        setAiItems(result.items);
+        setAiProfile(result.profile);
+        setAiTiming(result.timing);
+        setGenerated(true);
+      } else {
+        // BDM mode: existing flow
+        const result = await generateAiAssortmentScore({
+          bdmName: selectedBdm || "ALL",
+          stateName: selectedState || undefined,
+          clientName: selectedClient || undefined,
+          kitSize,
+          weightMin: weightMin ? Number(weightMin) : undefined,
+          weightMax: weightMax ? Number(weightMax) : undefined,
+          weights: scoringWeights,
+        });
+        setAiItems(result.items);
+        setAiProfile(result.profile);
+        setAiTiming(result.timing);
+        setGenerated(true);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setScoringError(msg);
@@ -445,7 +511,7 @@ export default function AssortmentPlanner() {
 
     const kit: DispatchKit = {
       id: kitId,
-      kind: mode === "client" ? "exhibition" : "bdm",
+      kind: mode === "client" ? "exhibition" : mode === "location" ? "location" : "bdm",
       bdm: selectedBdm || "Unassigned",
       state: selectedState || null,
       targetClient: selectedClient || null,
@@ -460,7 +526,11 @@ export default function AssortmentPlanner() {
       createdBy: "Merchandiser",
       approvedBy: null,
       approvedAt: null,
-      notes: `${mode} kit with ${kitItems.length} items`,
+      notes: mode === "client"
+        ? `Exhibition kit (${selectedExhibition}) with ${kitItems.length} items`
+        : mode === "location"
+        ? `Location kit (${selectedDestination}) with ${kitItems.length} items`
+        : `BDM kit with ${kitItems.length} items`,
       timeline: [{
         ts: new Date().toISOString(),
         event: "kit_created",
@@ -722,14 +792,20 @@ export default function AssortmentPlanner() {
           </div>
 
           {/* Score breakdown tooltip — top-left */}
-          {breakdown && (
-            <div className="absolute top-1.5 left-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-              <div className="bg-white/95 backdrop-blur-sm rounded px-1.5 py-1 text-[8px] font-mono text-[#3A3530] shadow-sm border border-[#EDE8DC]">
-                <div>V:{breakdown.visual} C:{breakdown.category} P:{breakdown.price}</div>
-                <div>A:{breakdown.ageing} U:{breakdown.uniqueness}</div>
-              </div>
+          <div className="absolute top-1.5 left-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="bg-white/95 backdrop-blur-sm rounded px-1.5 py-1 text-[8px] font-mono text-[#3A3530] shadow-sm border border-[#EDE8DC] max-w-[140px]">
+              {mode === "bdmstate" && breakdown ? (
+                <>
+                  <div>Vis:{Math.round(breakdown.visual * 100)}% Seg:{Math.round(breakdown.category * 100)}%</div>
+                  <div>Cat:{Math.round(breakdown.price * 100)}% Pri:{Math.round(breakdown.ageing * 100)}%</div>
+                </>
+              ) : (
+                reasons.slice(0, 2).map((r, i) => (
+                  <div key={i} className="truncate">{r.text.length > 30 ? r.text.slice(0, 30) + "\u2026" : r.text}</div>
+                ))
+              )}
             </div>
-          )}
+          </div>
 
           {/* Accept/Reject overlay — bottom gradient matching live .assort-actions */}
           <div className="absolute bottom-0 left-0 right-0 flex opacity-0 group-hover:opacity-100 transition-opacity"
@@ -986,17 +1062,40 @@ export default function AssortmentPlanner() {
         {mode === "client" && (
           <div className="flex gap-2.5 items-center flex-wrap">
             <select
-              value={selectedClient}
-              onChange={(e) => { setSelectedClient(e.target.value); resetResults(); }}
-              className="min-w-[200px] px-2.5 py-1.5 border border-[#D4C9A8] rounded bg-white text-[12.5px] text-[#1A1814] focus:border-[#C9A84C] outline-none"
+              value={selectedExhibition}
+              onChange={(e) => { setSelectedExhibition(e.target.value); resetResults(); }}
+              className="min-w-[250px] px-2.5 py-1.5 border border-[#D4C9A8] rounded bg-white text-[12.5px] text-[#1A1814] focus:border-[#C9A84C] outline-none"
             >
-              <option value="">{"\u2014"} Select Client {"\u2014"}</option>
-              {(DATA.assortClients || []).map((c) => (
-                <option key={c.name} value={c.name}>
-                  {c.name} {"\u2014"} {fmt(c.spend || 0)}
+              <option value="all">{"\uD83C\uDFAA"} All Exhibitions (combined)</option>
+              {exhibitions.map((exh) => (
+                <option key={exh.name} value={exh.name}>
+                  {exh.name} {"\u2014"} {exh.interestCount} interests, {exh.customerCount} customers
                 </option>
               ))}
             </select>
+            {/* Exhibition summary cards */}
+            {exhibitions.length > 0 && (
+              <div className="flex gap-2">
+                <div className="bg-white border border-[#D4C9A8] rounded px-2.5 py-1 text-center">
+                  <div className="text-[14px] font-bold text-[#C9A84C]" style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {exhibitions.reduce((s, e) => s + e.interestCount, 0).toLocaleString()}
+                  </div>
+                  <div className="font-mono text-[7px] tracking-wider text-[#6B6458]">TOTAL INTERESTS</div>
+                </div>
+                <div className="bg-white border border-[#D4C9A8] rounded px-2.5 py-1 text-center">
+                  <div className="text-[14px] font-bold text-[#1A1814]" style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {exhibitions.reduce((s, e) => s + e.uniqueSkuCount, 0).toLocaleString()}
+                  </div>
+                  <div className="font-mono text-[7px] tracking-wider text-[#6B6458]">UNIQUE SKUs</div>
+                </div>
+                <div className="bg-white border border-[#D4C9A8] rounded px-2.5 py-1 text-center">
+                  <div className="text-[14px] font-bold text-[#1A1814]" style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {exhibitions.length}
+                  </div>
+                  <div className="font-mono text-[7px] tracking-wider text-[#6B6458]">EXHIBITIONS</div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1004,14 +1103,17 @@ export default function AssortmentPlanner() {
         {mode === "location" && (
           <div className="flex gap-2.5 items-center flex-wrap">
             <select
-              className="min-w-[180px] px-2.5 py-1.5 border border-[#D4C9A8] rounded bg-white text-[12.5px] text-[#1A1814] focus:border-[#C9A84C] outline-none"
+              value={selectedDestination}
+              onChange={(e) => { setSelectedDestination(e.target.value); resetResults(); }}
+              className="min-w-[220px] px-2.5 py-1.5 border border-[#D4C9A8] rounded bg-white text-[12.5px] text-[#1A1814] focus:border-[#C9A84C] outline-none"
             >
               <option value="">{"\u2014"} Select Destination {"\u2014"}</option>
-              <option value="DELHI STORE">DELHI STORE</option>
-              <option value="JAIPUR STORE L3">JAIPUR STORE L3</option>
+              {locations.map((loc) => (
+                <option key={loc} value={loc}>{loc}</option>
+              ))}
             </select>
-            <select className="min-w-[180px] px-2.5 py-1.5 border border-[#D4C9A8] rounded bg-white text-[12.5px] text-[#1A1814] focus:border-[#C9A84C] outline-none">
-              <option>Source: Main Store (Jaipur)</option>
+            <select className="min-w-[220px] px-2.5 py-1.5 border border-[#D4C9A8] rounded bg-white text-[12.5px] text-[#1A1814] focus:border-[#C9A84C] outline-none" disabled>
+              <option>Source: RANIWALA JEWELLERS PVT LTD</option>
             </select>
           </div>
         )}
@@ -1039,6 +1141,46 @@ export default function AssortmentPlanner() {
             <option key={c} value={c}>{c}</option>
           ))}
         </select>
+
+        {/* Scoring weight inputs — only for BDM mode (exhibition/location use pre-computed scores) */}
+        {mode === "bdmstate" && <div className="flex items-center gap-1.5 border border-[#D4C9A8] rounded px-2 py-1 bg-white">
+          <span className="font-mono text-[8.5px] tracking-wider text-[#6B6458] mr-1">WEIGHTS</span>
+          {([
+            { key: "visual" as const, label: "Visual" },
+            { key: "attribute" as const, label: "Segment" },
+            { key: "velocity" as const, label: "Category" },
+            { key: "ageing" as const, label: "Price" },
+          ] as const).map(({ key, label }) => (
+            <div key={key} className="flex items-center gap-0.5">
+              <span className="text-[10px] text-[#6B6458]">{label}</span>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={scoringWeights[key]}
+                onChange={(e) => {
+                  const val = Math.max(0, Number(e.target.value) || 0);
+                  setScoringWeights(prev => {
+                    const otherSum = prev.visual + prev.attribute + prev.velocity + prev.ageing - prev[key];
+                    const capped = Math.min(val, 100 - otherSum);
+                    return { ...prev, [key]: Math.max(0, capped) };
+                  });
+                }}
+                className="w-[52px] px-1.5 py-1 border border-[#D4C9A8] rounded text-[12px] font-semibold text-center"
+                style={{ fontVariantNumeric: "tabular-nums" }}
+              />
+              <span className="text-[9px] text-[#9A9490]">%</span>
+            </div>
+          ))}
+          {(() => {
+            const total = scoringWeights.visual + scoringWeights.attribute + scoringWeights.velocity + scoringWeights.ageing;
+            return (
+              <span className={cn("font-mono text-[10px] font-bold ml-1", total === 100 ? "text-[#4A7C59]" : "text-[#A63C2A]")}>
+                ={total}%
+              </span>
+            );
+          })()}
+        </div>}
 
         {/* Right-side sliders + weight — matching live controls */}
         <div className="flex gap-3.5 items-center flex-wrap ml-auto">
@@ -1100,9 +1242,9 @@ export default function AssortmentPlanner() {
           {mode === "client" && (
             <>
               <div className="text-[40px] mb-3">{"\uD83C\uDFAA"}</div>
-              <div className="text-[15px] font-medium text-[#1A1814] mb-2">Select a client for exhibition kit</div>
+              <div className="text-[15px] font-medium text-[#1A1814] mb-2">Exhibition Assortment Engine</div>
               <div className="text-[12.5px] text-[#6B6458] max-w-[500px] text-center mb-6">
-                The engine will score every item against the client's purchase history, price band, categories and ageing urgency
+                Select an exhibition {"\u2014"} the engine matches exhibition interest signals against live inventory, scoring by family match, category, make type, and customer demand
               </div>
             </>
           )}
@@ -1252,37 +1394,70 @@ export default function AssortmentPlanner() {
                 </div>
               </div>
 
-              {/* AI SCORE BREAKDOWN */}
-              {(detailItem as AssortSuggestion & { scoreBreakdown?: AiScoreBreakdown }).scoreBreakdown && (
-                <div className="bg-[#FDFAF4] border border-[#EDE8DC] rounded-md p-2.5 mb-3">
-                  <div className="font-mono text-[9px] text-[#6B6458] tracking-[1.5px] mb-2">AI SCORE BREAKDOWN</div>
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <span className="text-[24px] font-bold text-[#C9A84C]" style={{ fontVariantNumeric: "tabular-nums" }}>
-                      {detailItem.score}
-                    </span>
-                    <span className="text-[11px] text-[#6B6458]">/ 100</span>
-                  </div>
-                  {(() => {
-                    const bd = (detailItem as AssortSuggestion & { scoreBreakdown?: AiScoreBreakdown }).scoreBreakdown!;
-                    const dims = [
-                      { label: "Visual Style", val: bd.visual, max: 35, color: "#1A56CC" },
-                      { label: "Category Fit", val: bd.category, max: 20, color: "#5B21B6" },
-                      { label: "Price Fit", val: bd.price, max: 15, color: "#8B6914" },
-                      { label: "Ageing Urgency", val: bd.ageing, max: 20, color: "#8B1A1A" },
-                      { label: "Uniqueness", val: bd.uniqueness, max: 10, color: "#166534" },
-                    ];
-                    return dims.map((d) => (
-                      <div key={d.label} className="flex items-center gap-2 mb-1">
-                        <span className="font-mono text-[8px] text-[#6B6458] w-[75px] shrink-0">{d.label}</span>
-                        <div className="flex-1 h-1.5 bg-[#EDE8DC] rounded-full overflow-hidden">
-                          <div className="h-full rounded-full" style={{ width: `${(d.val / d.max) * 100}%`, background: d.color }} />
-                        </div>
-                        <span className="font-mono text-[9px] text-[#3A3530] w-[28px] text-right">{d.val}/{d.max}</span>
-                      </div>
-                    ));
-                  })()}
+              {/* AI SCORE BREAKDOWN — mode-aware dimensions */}
+              <div className="bg-[#FDFAF4] border border-[#EDE8DC] rounded-md p-2.5 mb-3">
+                <div className="font-mono text-[9px] text-[#6B6458] tracking-[1.5px] mb-2">
+                  {mode === "client" ? "EXHIBITION MATCH BREAKDOWN" : mode === "location" ? "DISPATCH SCORE BREAKDOWN" : "AI SCORE BREAKDOWN"}
                 </div>
-              )}
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="text-[24px] font-bold text-[#C9A84C]" style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {detailItem.score}
+                  </span>
+                  <span className="text-[11px] text-[#6B6458]">/ 100</span>
+                </div>
+                {(() => {
+                  if (mode === "bdmstate") {
+                    // BDM mode: 4-dimension weighted breakdown
+                    const bd = (detailItem as AssortSuggestion & { scoreBreakdown?: AiScoreBreakdown }).scoreBreakdown;
+                    if (!bd) return null;
+                    const dims = [
+                      { label: "Visual", val: bd.visual, weight: scoringWeights.visual, color: "#1A56CC" },
+                      { label: "Segment", val: bd.category, weight: scoringWeights.attribute, color: "#5B21B6" },
+                      { label: "Category", val: bd.price, weight: scoringWeights.velocity, color: "#8B6914" },
+                      { label: "Price", val: bd.ageing, weight: scoringWeights.ageing, color: "#8B1A1A" },
+                    ];
+                    return dims.map((d) => {
+                      const pct = Math.round(Math.min(1, Math.max(0, d.val)) * 100);
+                      const earned = Math.round(d.val * d.weight);
+                      return (
+                        <div key={d.label} className="flex items-center gap-2 mb-1">
+                          <span className="font-mono text-[8px] text-[#6B6458] w-[55px] shrink-0">{d.label}</span>
+                          <div className="flex-1 h-1.5 bg-[#EDE8DC] rounded-full overflow-hidden">
+                            <div className="h-full rounded-full" style={{ width: `${pct}%`, background: d.color }} />
+                          </div>
+                          <span className="font-mono text-[9px] text-[#3A3530] w-[38px] text-right">{earned}/{d.weight}</span>
+                        </div>
+                      );
+                    });
+                  }
+                  // Exhibition & Location: derive bars from reasons
+                  const score = detailItem.score;
+                  const reasons = detailItem.reasons || [];
+                  const bars: Array<{ label: string; pct: number; color: string }> = [];
+                  for (const r of reasons) {
+                    const reason = typeof r === "string" ? { tag: r, text: r } : r;
+                    let color = "#8B6914";
+                    if (reason.tag === "match") color = "#1A56CC";
+                    else if (reason.tag === "pref") color = "#5B21B6";
+                    else if (reason.tag === "clearance" || reason.tag === "slow") color = "#8B1A1A";
+                    else if (reason.tag === "band") color = "#8B6914";
+                    else if (reason.tag === "new") color = "#166534";
+                    // Distribute score proportionally across reasons
+                    const share = reasons.length > 0 ? score / reasons.length : 0;
+                    bars.push({ label: reason.text.length > 25 ? reason.text.slice(0, 25) + "\u2026" : reason.text, pct: Math.min(100, Math.round(share)), color });
+                  }
+                  if (bars.length === 0) bars.push({ label: "Base score", pct: score, color: "#8B6914" });
+                  return bars.map((b, i) => (
+                    <div key={i} className="flex items-center gap-2 mb-1">
+                      <span className="font-mono text-[7.5px] text-[#6B6458] w-[120px] shrink-0 truncate" title={b.label}>{b.label}</span>
+                      <div className="flex-1 h-1.5 bg-[#EDE8DC] rounded-full overflow-hidden">
+                        <div className="h-full rounded-full" style={{ width: `${b.pct}%`, background: b.color }} />
+                      </div>
+                      <span className="font-mono text-[9px] text-[#3A3530] w-[28px] text-right">{b.pct}</span>
+                    </div>
+                  ));
+                })()}
+              </div>
 
               {/* WHY RECOMMENDED */}
               {detailItem.reasons.length > 0 && (

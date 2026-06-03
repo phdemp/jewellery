@@ -21,6 +21,8 @@ interface IntelligenceState {
   addToKitQueue: (kit: DispatchKit) => void;
   auditLog: AuditEntry[];
   logAudit: (action: string, code: string, detail: string) => void;
+  catalogueClient: string | null;
+  setCatalogueClient: (client: string | null) => void;
 }
 
 const IntelligenceContext = createContext<IntelligenceState | null>(null);
@@ -31,6 +33,7 @@ export function IntelligenceProvider({ children }: { children: ReactNode }) {
   const [dashFilter, setDashFilter] = useState<DashFilter>({ type: null, value: null });
   const [kitQueue, setKitQueue] = useState<DispatchKit[]>([]);
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
+  const [catalogueClient, setCatalogueClient] = useState<string | null>(null);
 
   const addToKitQueue = (kit: DispatchKit) => {
     setKitQueue(prev => [kit, ...prev]);
@@ -53,6 +56,7 @@ export function IntelligenceProvider({ children }: { children: ReactNode }) {
       dashFilter, setDashFilter,
       kitQueue, setKitQueue, addToKitQueue,
       auditLog, logAudit,
+      catalogueClient, setCatalogueClient,
     }}>
       {children}
     </IntelligenceContext.Provider>

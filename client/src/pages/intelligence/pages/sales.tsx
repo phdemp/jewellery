@@ -29,18 +29,18 @@ interface StatCardProps {
 
 function StatCard({ label, value, sub, icon }: StatCardProps) {
   return (
-    <div className="rounded-lg border border-[#E8E0D0] bg-white p-5">
+    <div className="rounded-lg border border-[#D4C9A8] bg-white p-5">
       <div className="flex items-start justify-between">
         <div>
           <p
-            className="text-[11px] tracking-[0.08em] text-[#6B6458] mb-1"
+            className="text-[9px] tracking-[1.8px] text-[#6B6458] mb-1"
             style={{ fontFamily: "'DM Mono', monospace" }}
           >
             {label}
           </p>
           <p
-            className="text-[22px] font-semibold text-[#1A1814]"
-            style={{ fontFamily: "'Cormorant Garamond', serif" }}
+            className="text-[30px] font-medium text-[#1A1814]"
+            style={{ fontFamily: "'Jost', sans-serif" }}
           >
             {value}
           </p>
@@ -51,7 +51,7 @@ function StatCard({ label, value, sub, icon }: StatCardProps) {
             {sub}
           </p>
         </div>
-        <div className="w-9 h-9 rounded-full bg-[#FAF7F0] flex items-center justify-center text-[#C9A84C]">
+        <div className="w-9 h-9 rounded-full bg-white flex items-center justify-center text-[#C9A84C]">
           {icon}
         </div>
       </div>
@@ -79,10 +79,10 @@ function HorizontalBarList({
   const maxVal = Math.max(...items.map((i) => i.value), 1);
 
   return (
-    <div className="rounded-lg border border-[#E8E0D0] bg-white p-5">
+    <div className="rounded-lg border border-[#D4C9A8] bg-white p-5">
       <h3
         className="text-[15px] font-semibold text-[#1A1814] mb-4"
-        style={{ fontFamily: "'Cormorant Garamond', serif" }}
+        style={{ fontFamily: "'Jost', sans-serif" }}
       >
         {title}
       </h3>
@@ -100,9 +100,9 @@ function HorizontalBarList({
                 {fmt(item.value)} ({fmtN(item.count)})
               </span>
             </div>
-            <div className="h-2 rounded-full bg-[#F5F0E6] overflow-hidden">
+            <div className="h-[7px] rounded-[4px] bg-[#F5F1E8] overflow-hidden">
               <div
-                className="h-full rounded-full transition-all"
+                className="h-full rounded-[4px] transition-all"
                 style={{
                   width: `${pct(item.value, maxVal)}%`,
                   backgroundColor: color,
@@ -169,6 +169,7 @@ export default function SalesAnalysis() {
 
   return (
     <div className="space-y-6">
+      <div style={{ height: 2, background: "linear-gradient(90deg, #C9A84C, transparent)", marginBottom: 20, borderRadius: 1 }} />
       {/* ---------- stat cards ---------- */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
@@ -212,10 +213,10 @@ export default function SalesAnalysis() {
       </div>
 
       {/* ---------- monthly revenue trend ---------- */}
-      <div className="rounded-lg border border-[#E8E0D0] bg-white p-5">
+      <div className="rounded-lg border border-[#D4C9A8] bg-white p-5">
         <h3
           className="text-[15px] font-semibold text-[#1A1814] mb-4"
-          style={{ fontFamily: "'Cormorant Garamond', serif" }}
+          style={{ fontFamily: "'Jost', sans-serif" }}
         >
           Monthly Revenue Trend (FY 2025-26)
         </h3>
@@ -262,11 +263,11 @@ export default function SalesAnalysis() {
       </div>
 
       {/* ---------- sales transactions table ---------- */}
-      <div className="rounded-lg border border-[#E8E0D0] bg-white">
-        <div className="flex items-center justify-between p-4 border-b border-[#E8E0D0]">
+      <div className="rounded-lg border border-[#D4C9A8] bg-white">
+        <div className="flex items-center justify-between p-4 border-b border-[#D4C9A8]">
           <h3
             className="text-[15px] font-semibold text-[#1A1814]"
-            style={{ fontFamily: "'Cormorant Garamond', serif" }}
+            style={{ fontFamily: "'Jost', sans-serif" }}
           >
             Sales Transactions
           </h3>
@@ -283,7 +284,7 @@ export default function SalesAnalysis() {
                 setPage(1);
               }}
               className={cn(
-                "h-8 w-64 pl-8 pr-3 rounded-md border border-[#E8E0D0] bg-[#FAF7F0]",
+                "h-8 w-64 pl-8 pr-3 rounded-md border border-[#D4C9A8] bg-white",
                 "text-[12px] text-[#3D3830] placeholder:text-[#6B6458]/40",
                 "focus:outline-none focus:ring-1 focus:ring-[#C9A84C]/40"
               )}
@@ -295,7 +296,7 @@ export default function SalesAnalysis() {
         <div className="overflow-x-auto">
           <table className="w-full text-[12px]">
             <thead>
-              <tr className="border-b border-[#E8E0D0] bg-[#FAF7F0]">
+              <tr className="border-b border-[#D4C9A8] bg-[#F5F1E8]">
                 {[
                   "Date",
                   "Client Name",
@@ -310,7 +311,7 @@ export default function SalesAnalysis() {
                   <th
                     key={h}
                     className="px-3 py-2.5 text-left font-medium text-[#6B6458] whitespace-nowrap"
-                    style={{ fontFamily: "'DM Mono', monospace", fontSize: 10.5 }}
+                    style={{ fontFamily: "'DM Mono', monospace", fontSize: 10.5, letterSpacing: "1.5px", textTransform: "uppercase" as const }}
                   >
                     {h}
                   </th>
@@ -321,7 +322,7 @@ export default function SalesAnalysis() {
               {pageRows.map((row, idx) => (
                 <tr
                   key={`${row.styleCode}-${row.transDate}-${idx}`}
-                  className="border-b border-[#F5F0E6] hover:bg-[#FAF7F0]/60 transition-colors"
+                  className="border-b border-[#F5F1E8] hover:bg-[#F5F1E8] transition-colors"
                 >
                   <td className="px-3 py-2 whitespace-nowrap text-[#6B6458]">
                     {row.transDate}
@@ -373,7 +374,7 @@ export default function SalesAnalysis() {
 
         {/* pagination */}
         {totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-[#E8E0D0]">
+          <div className="flex items-center justify-between px-4 py-3 border-t border-[#D4C9A8]">
             <span
               className="text-[11px] text-[#6B6458]"
               style={{ fontFamily: "'DM Mono', monospace" }}
@@ -387,10 +388,10 @@ export default function SalesAnalysis() {
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={safePage <= 1}
                 className={cn(
-                  "h-7 px-2.5 rounded text-[11px] border border-[#E8E0D0]",
+                  "h-7 px-2.5 rounded text-[11px] border border-[#D4C9A8]",
                   safePage <= 1
                     ? "text-[#6B6458]/30 cursor-not-allowed"
-                    : "text-[#3D3830] hover:bg-[#FAF7F0]"
+                    : "text-[#3D3830] hover:bg-[#F5F1E8]"
                 )}
               >
                 Prev
@@ -413,8 +414,8 @@ export default function SalesAnalysis() {
                     className={cn(
                       "h-7 w-7 rounded text-[11px] border",
                       safePage === pageNum
-                        ? "bg-[#C9A84C] text-white border-[#C9A84C]"
-                        : "border-[#E8E0D0] text-[#3D3830] hover:bg-[#FAF7F0]"
+                        ? "bg-[#C9A84C] text-[#1A1814] border-[#C9A84C]"
+                        : "border-[#D4C9A8] text-[#3D3830] hover:bg-[#F5F1E8]"
                     )}
                   >
                     {pageNum}
@@ -425,10 +426,10 @@ export default function SalesAnalysis() {
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={safePage >= totalPages}
                 className={cn(
-                  "h-7 px-2.5 rounded text-[11px] border border-[#E8E0D0]",
+                  "h-7 px-2.5 rounded text-[11px] border border-[#D4C9A8]",
                   safePage >= totalPages
                     ? "text-[#6B6458]/30 cursor-not-allowed"
-                    : "text-[#3D3830] hover:bg-[#FAF7F0]"
+                    : "text-[#3D3830] hover:bg-[#F5F1E8]"
                 )}
               >
                 Next
