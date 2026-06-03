@@ -2803,7 +2803,8 @@ export async function registerRoutes(
           COALESCE(SUM(cost_price) FILTER (WHERE current_status = 'On Hand'), 0)::bigint AS "onHandCostValue",
           COALESCE(SUM(tag_price) FILTER (WHERE current_status = 'On Hand'), 0)::bigint AS "onHandTagValue",
           COUNT(*) FILTER (WHERE ageing_days > 365 AND current_status = 'On Hand')::int AS "deadStockCount",
-          COALESCE(SUM(cost_price) FILTER (WHERE ageing_days > 365 AND current_status = 'On Hand'), 0)::bigint AS "deadStockCostValue"
+          COALESCE(SUM(cost_price) FILTER (WHERE ageing_days > 365 AND current_status = 'On Hand'), 0)::bigint AS "deadStockCostValue",
+          COALESCE(SUM(CAST(pure_wt AS numeric)) FILTER (WHERE current_status = 'On Hand'), 0)::numeric AS "onHandPureWt"
         FROM live_stock_items
       `);
 
@@ -2816,6 +2817,7 @@ export async function registerRoutes(
         onHandTagValue: string;
         deadStockCount: number;
         deadStockCostValue: string;
+        onHandPureWt: string;
       };
 
       // Category breakdown (top 10 by count)
@@ -2845,6 +2847,38 @@ export async function registerRoutes(
         ORDER BY count DESC
       `);
 
+      // Ageing distribution breakdown (On Hand only)
+      const ageingResult = await db.execute(sql`
+        SELECT
+          CASE
+            WHEN ageing_days <= 30 THEN 'Fresh'
+            WHEN ageing_days <= 60 THEN 'Active'
+            WHEN ageing_days <= 90 THEN 'Moderate'
+            WHEN ageing_days <= 180 THEN 'Slow Moving'
+            WHEN ageing_days <= 270 THEN 'Ageing'
+            ELSE 'Non-Moving'
+          END AS label,
+          COUNT(*)::int AS count,
+          COALESCE(SUM(tag_price), 0)::bigint AS "tagValue"
+        FROM live_stock_items
+        WHERE current_status = 'On Hand'
+        GROUP BY label
+        ORDER BY MIN(ageing_days)
+      `);
+
+      // Sales person breakdown (Memo items — gross weight + cost)
+      const bdmResult = await db.execute(sql`
+        SELECT
+          COALESCE(memo_sales_person_name, 'Unassigned') AS "salesPerson",
+          COUNT(*)::int AS count,
+          COALESCE(SUM(CAST(NULLIF(TRIM(gross_wt), '') AS numeric)), 0)::numeric AS "grossWt",
+          COALESCE(SUM(cost_price), 0)::bigint AS "costValue"
+        FROM live_stock_items
+        WHERE current_status = 'Memo'
+        GROUP BY "salesPerson"
+        ORDER BY "grossWt" DESC
+      `);
+
       res.json({
         totalCount: summary.totalCount,
         onHandCount: summary.onHandCount,
@@ -2854,6 +2888,7 @@ export async function registerRoutes(
         onHandTagValue: Number(summary.onHandTagValue),
         deadStockCount: summary.deadStockCount,
         deadStockCostValue: Number(summary.deadStockCostValue),
+        onHandPureWt: Number(summary.onHandPureWt),
         categoryBreakdown: (catResult.rows as Array<{ category: string; count: number; costValue: string; tagValue: string }>).map(r => ({
           category: r.category,
           count: r.count,
@@ -2865,6 +2900,17 @@ export async function registerRoutes(
           count: r.count,
           costValue: Number(r.costValue),
           tagValue: Number(r.tagValue),
+        })),
+        ageingBreakdown: (ageingResult.rows as Array<{ label: string; count: number; tagValue: string }>).map(r => ({
+          label: r.label,
+          count: r.count,
+          tagValue: Number(r.tagValue),
+        })),
+        bdmBreakdown: (bdmResult.rows as Array<{ salesPerson: string; count: number; grossWt: string; costValue: string }>).map(r => ({
+          salesPerson: r.salesPerson,
+          count: r.count,
+          grossWt: Number(r.grossWt),
+          costValue: Number(r.costValue),
         })),
       });
     } catch (error: unknown) {

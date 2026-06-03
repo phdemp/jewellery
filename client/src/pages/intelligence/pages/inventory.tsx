@@ -1,9 +1,9 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchStockItems, fetchStockSummary } from "@/lib/api";
-import type { LiveStockItem } from "@/lib/api";
+import type { LiveStockItem, StockSummary } from "@/lib/api";
 import { fmt, ageTagClass, downloadCSV } from "../lib/intelligence-utils";
-import { INV_PER_PAGE } from "../lib/intelligence-constants";
+import { INV_PER_PAGE, AGEING_COLORS } from "../lib/intelligence-constants";
 import { cn } from "@/lib/utils";
 
 import {
@@ -13,6 +13,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   Select,
   SelectContent,
@@ -34,7 +35,23 @@ import {
   Plus,
   Eye,
   FileText,
+  BarChart3,
 } from "lucide-react";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Cell,
+  ComposedChart,
+  Line,
+  Legend,
+  PieChart,
+  Pie,
+} from "recharts";
 
 // ---- Ageing tag computation from ageingDays ----
 
@@ -71,6 +88,7 @@ export default function InventoryPage() {
   // Detail modal
   const [selectedItem, setSelectedItem] = useState<LiveStockItem | null>(null);
   const [memoOpen, setMemoOpen] = useState(false);
+  const [dashboardOpen, setDashboardOpen] = useState(false);
 
   // ---- Fetch summary for filter dropdown options ----
   const { data: summary } = useQuery({
@@ -156,7 +174,7 @@ export default function InventoryPage() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 relative">
       <div style={{ height: 2, background: "linear-gradient(90deg, #C9A84C, transparent)", marginBottom: 20, borderRadius: 1 }} />
       {/* Page header */}
       <div className="flex items-center justify-between">
@@ -176,6 +194,15 @@ export default function InventoryPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setDashboardOpen(true)}
+            className="h-8 text-xs border-[#C9A84C]/40 text-[#8B6914] hover:bg-[#C9A84C]/10"
+          >
+            <BarChart3 className="w-3.5 h-3.5 mr-1.5" />
+            Dashboard
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -417,6 +444,11 @@ export default function InventoryPage() {
       {/* Item detail modal */}
       <ItemDetailModal item={selectedItem} onClose={() => setSelectedItem(null)} />
       <MemoTrackerDialog open={memoOpen} onClose={() => setMemoOpen(false)} />
+      <InventoryDashboardSheet
+        open={dashboardOpen}
+        onClose={() => setDashboardOpen(false)}
+        summary={summary ?? null}
+      />
     </div>
   );
 }
@@ -960,6 +992,387 @@ function MemoTrackerDialog({ open, onClose }: { open: boolean; onClose: () => vo
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ---- Inventory Dashboard Sheet ----
+
+interface DashboardPanelProps {
+  open: boolean;
+  onClose: () => void;
+  summary: StockSummary | null;
+}
+
+function InventoryDashboardSheet({ open, onClose, summary }: DashboardPanelProps) {
+  const kpis = useMemo(() => {
+    if (!summary) return [];
+    return [
+      { label: "On Hand", value: summary.onHandCount.toLocaleString("en-IN"), color: "#4A7C59" },
+      { label: "Memo", value: summary.memoCount.toLocaleString("en-IN"), color: "#8B5E00" },
+      { label: "On-Hand Cost Value", value: fmt(summary.onHandCostValue), color: "#6B6458" },
+      { label: "Pure Weight", value: `${(summary.onHandPureWt ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}g`, color: "#C9A84C" },
+    ];
+  }, [summary]);
+
+  const ageingData = useMemo(() => {
+    const bucketOrder = ["Fresh", "Active", "Moderate", "Slow Moving", "Ageing", "Non-Moving"];
+    const data = summary?.ageingBreakdown ?? [];
+    return bucketOrder.map((label) => {
+      const found = data.find((d) => d.label === label);
+      return { label, count: found?.count ?? 0, tagValue: found?.tagValue ?? 0 };
+    });
+  }, [summary]);
+
+  const categoryData = useMemo(
+    () => (summary?.categoryBreakdown ?? []).slice(0, 10),
+    [summary],
+  );
+
+  const locationData = useMemo(
+    () => (summary?.locationBreakdown ?? []).slice(0, 10),
+    [summary],
+  );
+
+  const locationStockData = useMemo(
+    () =>
+      (summary?.locationBreakdown ?? [])
+        .filter((l) => l.location.toLowerCase() !== "client repair")
+        .sort((a, b) => b.count - a.count),
+    [summary],
+  );
+
+  const bdmStockData = useMemo(
+    () =>
+      (summary?.bdmBreakdown ?? [])
+        .filter((b) => b.salesPerson !== "HQRJP" && b.salesPerson !== "SHREEJA")
+        .sort((a, b) => b.grossWt - a.grossWt),
+    [summary],
+  );
+
+  const SECTION_TITLE: React.CSSProperties = {
+    fontFamily: SERIF,
+    fontWeight: 600,
+    fontSize: "14px",
+    color: "#1A1814",
+  };
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 12 }}
+          transition={{ duration: 0.25 }}
+          className="absolute inset-0 z-40 overflow-y-auto"
+          style={{ backgroundColor: "#FAF7F0" }}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between px-0 pt-0 pb-4 border-b border-[#EDE7D8]">
+            <div>
+              <h2
+                className="text-2xl text-[#1A1814]"
+                style={{ fontFamily: SERIF, fontWeight: 600 }}
+              >
+                Inventory Dashboard
+              </h2>
+              <p className="text-xs text-[#6B6458] mt-0.5" style={{ fontFamily: MONO }}>
+                On-hand stock overview &middot; KPIs, ageing &amp; breakdowns
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onClose}
+              className="h-8 text-xs border-[#D4C9A8] text-[#1A1814]/60 hover:bg-[#F5F1E8]"
+            >
+              <X className="w-3.5 h-3.5 mr-1.5" />
+              Close Dashboard
+            </Button>
+          </div>
+
+          <div className="py-5 space-y-6">
+            {/* KPI Cards — 6 across */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              {kpis.map((kpi) => (
+                <div
+                  key={kpi.label}
+                  className="rounded-lg border border-[#EDE7D8] bg-white p-4"
+                >
+                  <p
+                    className="text-[9px] uppercase tracking-[1.5px] text-[#6B6458] mb-1.5"
+                    style={{ fontFamily: MONO }}
+                  >
+                    {kpi.label}
+                  </p>
+                  <p
+                    className="text-xl font-semibold"
+                    style={{ fontFamily: MONO, color: kpi.color }}
+                  >
+                    {kpi.value}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {/* Ageing Distribution — pie chart */}
+            <div>
+              <p style={SECTION_TITLE} className="mb-3">Ageing Distribution</p>
+              <div className="rounded-lg border border-[#EDE7D8] bg-white p-5 flex flex-col items-center">
+                <ResponsiveContainer width="100%" height={280}>
+                  <PieChart>
+                    <Pie
+                      data={ageingData}
+                      dataKey="count"
+                      nameKey="label"
+                      cx="50%"
+                      cy="50%"
+                      outerRadius={100}
+                      innerRadius={0}
+                      paddingAngle={2}
+                      label={({ label, count }: { label: string; count: number }) => `${label} (${count})`}
+                      labelLine={{ stroke: "#D4C9A8", strokeWidth: 1 }}
+                      style={{ fontSize: 10, fontFamily: MONO }}
+                    >
+                      {ageingData.map((entry) => (
+                        <Cell key={entry.label} fill={AGEING_COLORS[entry.label] || "#C9A84C"} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{
+                        fontFamily: MONO,
+                        fontSize: "11px",
+                        borderRadius: "8px",
+                        border: "1px solid #EDE7D8",
+                        backgroundColor: "#FDFBF7",
+                      }}
+                      formatter={(value: number, name: string) => [
+                        value.toLocaleString("en-IN"),
+                        name,
+                      ]}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+                {/* Legend row */}
+                <div className="flex flex-wrap justify-center gap-x-4 gap-y-1.5 mt-1">
+                  {ageingData.map((a) => (
+                    <div key={a.label} className="flex items-center gap-1.5">
+                      <span
+                        className="inline-block w-3 h-3 rounded-sm"
+                        style={{ backgroundColor: AGEING_COLORS[a.label] || "#C9A84C" }}
+                      />
+                      <span className="text-[10px] text-[#6B6458]" style={{ fontFamily: MONO }}>
+                        {a.label} ({a.count})
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Category + Location side by side */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Category Breakdown */}
+              <div>
+                <p style={SECTION_TITLE} className="mb-3">Category Breakdown (Top 10)</p>
+                <div className="rounded-lg border border-[#EDE7D8] bg-white p-5">
+                  {categoryData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={Math.max(220, categoryData.length * 30)}>
+                      <BarChart data={categoryData} layout="vertical" margin={{ left: 0, right: 16, top: 4, bottom: 4 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#EDE7D8" horizontal={false} />
+                        <XAxis type="number" tick={{ fontSize: 10, fontFamily: MONO, fill: "#6B6458" }} />
+                        <YAxis
+                          type="category"
+                          dataKey="category"
+                          width={110}
+                          tick={{ fontSize: 10, fontFamily: MONO, fill: "#1A1814" }}
+                        />
+                        <Tooltip
+                          contentStyle={{
+                            fontFamily: MONO,
+                            fontSize: "11px",
+                            borderRadius: "8px",
+                            border: "1px solid #EDE7D8",
+                            backgroundColor: "#FDFBF7",
+                          }}
+                          formatter={(value: number, name: string) => [
+                            name === "tagValue" ? fmt(value) : value.toLocaleString("en-IN"),
+                            name === "tagValue" ? "Tag Value" : "Count",
+                          ]}
+                        />
+                        <Bar dataKey="count" fill="#C9A84C" radius={[0, 4, 4, 0]} barSize={18} />
+                        <Bar dataKey="tagValue" fill="#4A7C59" radius={[0, 4, 4, 0]} barSize={18} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <p className="text-xs text-[#1A1814]/30 text-center py-8" style={{ fontFamily: MONO }}>
+                      No category data
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Location Breakdown */}
+              <div>
+                <p style={SECTION_TITLE} className="mb-3">Location Breakdown</p>
+                <div className="rounded-lg border border-[#EDE7D8] bg-white p-5">
+                  {locationData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={Math.max(220, locationData.length * 30)}>
+                      <BarChart data={locationData} layout="vertical" margin={{ left: 0, right: 16, top: 4, bottom: 4 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#EDE7D8" horizontal={false} />
+                        <XAxis type="number" tick={{ fontSize: 10, fontFamily: MONO, fill: "#6B6458" }} />
+                        <YAxis
+                          type="category"
+                          dataKey="location"
+                          width={120}
+                          tick={{ fontSize: 10, fontFamily: MONO, fill: "#1A1814" }}
+                        />
+                        <Tooltip
+                          contentStyle={{
+                            fontFamily: MONO,
+                            fontSize: "11px",
+                            borderRadius: "8px",
+                            border: "1px solid #EDE7D8",
+                            backgroundColor: "#FDFBF7",
+                          }}
+                          formatter={(value: number, name: string) => [
+                            name === "tagValue" || name === "costValue" ? fmt(value) : value.toLocaleString("en-IN"),
+                            name === "tagValue" ? "Tag Value" : name === "costValue" ? "Cost Value" : "Count",
+                          ]}
+                        />
+                        <Bar dataKey="count" fill="#2B5EA7" radius={[0, 4, 4, 0]} barSize={18} />
+                        <Bar dataKey="tagValue" fill="#C9A84C" radius={[0, 4, 4, 0]} barSize={18} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <p className="text-xs text-[#1A1814]/30 text-center py-8" style={{ fontFamily: MONO }}>
+                      No location data
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Location + BDM composed charts side by side */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Location On-Hand Stock — vertical bar + cost line */}
+              <div>
+                <p style={SECTION_TITLE} className="mb-3">Location-wise On-Hand Stock</p>
+                <div className="rounded-lg border border-[#EDE7D8] bg-white p-5">
+                  {locationStockData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={340}>
+                      <ComposedChart data={locationStockData} margin={{ left: 10, right: 10, top: 8, bottom: 40 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#EDE7D8" vertical={false} />
+                        <XAxis
+                          dataKey="location"
+                          tick={{ fontSize: 9, fontFamily: MONO, fill: "#1A1814" }}
+                          angle={-35}
+                          textAnchor="end"
+                          interval={0}
+                          height={60}
+                        />
+                        <YAxis
+                          yAxisId="left"
+                          tick={{ fontSize: 10, fontFamily: MONO, fill: "#6B6458" }}
+                          label={{ value: "On Hand Count", angle: -90, position: "insideLeft", style: { fontSize: 10, fontFamily: MONO, fill: "#6B6458" }, offset: -5 }}
+                        />
+                        <YAxis
+                          yAxisId="right"
+                          orientation="right"
+                          tick={{ fontSize: 10, fontFamily: MONO, fill: "#C9A84C" }}
+                          tickFormatter={(v: number) => fmt(v)}
+                          label={{ value: "Cost Value (\u20B9)", angle: 90, position: "insideRight", style: { fontSize: 10, fontFamily: MONO, fill: "#C9A84C" }, offset: -5 }}
+                        />
+                        <Tooltip
+                          contentStyle={{
+                            fontFamily: MONO,
+                            fontSize: "11px",
+                            borderRadius: "8px",
+                            border: "1px solid #EDE7D8",
+                            backgroundColor: "#FDFBF7",
+                          }}
+                          formatter={(value: number, name: string) => [
+                            name === "costValue" ? fmt(value) : value.toLocaleString("en-IN"),
+                            name === "costValue" ? "Cost Value" : "On Hand",
+                          ]}
+                        />
+                        <Legend
+                          wrapperStyle={{ fontFamily: MONO, fontSize: "10px" }}
+                          formatter={(value: string) => (value === "count" ? "On Hand" : "Cost Value")}
+                        />
+                        <Bar yAxisId="left" dataKey="count" fill="#2B5EA7" radius={[4, 4, 0, 0]} barSize={24} />
+                        <Line yAxisId="right" dataKey="costValue" stroke="#C9A84C" strokeWidth={2} dot={{ r: 3, fill: "#C9A84C" }} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <p className="text-xs text-[#1A1814]/30 text-center py-8" style={{ fontFamily: MONO }}>
+                      No location data
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* BDM Memo Stock — gross weight bar + cost line */}
+              <div>
+                <p style={SECTION_TITLE} className="mb-3">Sales Person Memo Holdings</p>
+                <div className="rounded-lg border border-[#EDE7D8] bg-white p-5">
+                  {bdmStockData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={340}>
+                      <ComposedChart data={bdmStockData} margin={{ left: 10, right: 10, top: 8, bottom: 40 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#EDE7D8" vertical={false} />
+                        <XAxis
+                          dataKey="salesPerson"
+                          tick={{ fontSize: 9, fontFamily: MONO, fill: "#1A1814" }}
+                          angle={-35}
+                          textAnchor="end"
+                          interval={0}
+                          height={60}
+                        />
+                        <YAxis
+                          yAxisId="left"
+                          tick={{ fontSize: 10, fontFamily: MONO, fill: "#6B6458" }}
+                          label={{ value: "Gross Weight (g)", angle: -90, position: "insideLeft", style: { fontSize: 10, fontFamily: MONO, fill: "#6B6458" }, offset: -5 }}
+                        />
+                        <YAxis
+                          yAxisId="right"
+                          orientation="right"
+                          tick={{ fontSize: 10, fontFamily: MONO, fill: "#A63C2A" }}
+                          tickFormatter={(v: number) => fmt(v)}
+                          label={{ value: "Cost Value (\u20B9)", angle: 90, position: "insideRight", style: { fontSize: 10, fontFamily: MONO, fill: "#A63C2A" }, offset: -5 }}
+                        />
+                        <Tooltip
+                          contentStyle={{
+                            fontFamily: MONO,
+                            fontSize: "11px",
+                            borderRadius: "8px",
+                            border: "1px solid #EDE7D8",
+                            backgroundColor: "#FDFBF7",
+                          }}
+                          formatter={(value: number, name: string) => [
+                            name === "costValue" ? fmt(value) : `${value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}g`,
+                            name === "costValue" ? "Cost Value" : "Gross Weight",
+                          ]}
+                        />
+                        <Legend
+                          wrapperStyle={{ fontFamily: MONO, fontSize: "10px" }}
+                          formatter={(value: string) => (value === "grossWt" ? "Gross Weight" : "Cost Value")}
+                        />
+                        <Bar yAxisId="left" dataKey="grossWt" fill="#4A7C59" radius={[4, 4, 0, 0]} barSize={24} />
+                        <Line yAxisId="right" dataKey="costValue" stroke="#A63C2A" strokeWidth={2} dot={{ r: 3, fill: "#A63C2A" }} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <p className="text-xs text-[#1A1814]/30 text-center py-8" style={{ fontFamily: MONO }}>
+                      No sales person data
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 

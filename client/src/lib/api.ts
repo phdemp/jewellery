@@ -1064,8 +1064,11 @@ export interface StockSummary {
   onHandTagValue: number;
   deadStockCount: number;
   deadStockCostValue: number;
+  onHandPureWt: number;
   categoryBreakdown: Array<{ category: string; count: number; costValue: number; tagValue: number }>;
   locationBreakdown: Array<{ location: string; count: number; costValue: number; tagValue: number }>;
+  ageingBreakdown: Array<{ label: string; count: number; tagValue: number }>;
+  bdmBreakdown: Array<{ salesPerson: string; count: number; grossWt: number; costValue: number }>;
 }
 
 export async function fetchStockItems(params: Record<string, string | number>): Promise<StockItemsResponse> {
