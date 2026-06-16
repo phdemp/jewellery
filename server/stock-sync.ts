@@ -52,32 +52,52 @@ export interface SyncResult {
 export async function syncStockData(): Promise<SyncResult> {
   console.log("[stock-sync] Starting sync from external API...");
 
-  const response = await fetch(STOCK_API_URL, {
-    headers: { "AuthorizationToken": AUTH_TOKEN },
-    signal: AbortSignal.timeout(120000),
-  });
+  // Paginated fetch — API returns max 500 items per page
+  const allData: StockApiItem[] = [];
+  const PAGE_SIZE = 500;
+  const MAX_PAGES = 100;
+  let pageNumber = 1;
 
-  if (!response.ok) {
-    throw new Error(`Stock API returned ${response.status}`);
+  while (pageNumber <= MAX_PAGES) {
+    const response = await fetch(STOCK_API_URL, {
+      headers: {
+        "AuthorizationToken": AUTH_TOKEN,
+        "Content-Type": "application/json",
+        "DataFor": "All",
+        "PageNumber": String(pageNumber),
+        "PageSize": String(PAGE_SIZE),
+      },
+      signal: AbortSignal.timeout(30000),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Stock API returned ${response.status}`);
+    }
+
+    const json: StockApiResponse = await response.json();
+    if (!json.status || !json.data || json.data.length === 0) {
+      break; // No more pages
+    }
+
+    allData.push(...json.data);
+    console.log(`[stock-sync] Page ${pageNumber}: ${json.data.length} items (total: ${allData.length})`);
+
+    if (json.data.length < PAGE_SIZE) break;
+    pageNumber++;
   }
 
-  const json: StockApiResponse = await response.json();
-  if (!json.status || !json.data) {
-    throw new Error("Stock API returned error: " + json.message);
-  }
-
-  console.log(`[stock-sync] Fetched ${json.data.length} items from API`);
+  console.log(`[stock-sync] Fetched ${allData.length} items from API`);
 
   // Upsert by jewel_id — preserves embedding_vector on existing rows
   // Step 1: Mark all as stale, then upsert incoming, then remove truly gone items
-  const incomingJewelIds = new Set(json.data.map(item => item.JewelId));
+  const incomingJewelIds = new Set(allData.map(item => item.JewelId));
 
   const BATCH_SIZE = 500;
   let inserted = 0;
   let updated = 0;
 
-  for (let i = 0; i < json.data.length; i += BATCH_SIZE) {
-    const batch = json.data.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < allData.length; i += BATCH_SIZE) {
+    const batch = allData.slice(i, i + BATCH_SIZE);
 
     for (const item of batch) {
       const jewelCode = String(item.JewelCode || "");
@@ -158,7 +178,7 @@ export async function syncStockData(): Promise<SyncResult> {
   }
 
   console.log(`[stock-sync] Sync complete: ${inserted} new, ${updated} updated, ${removed} removed`);
-  return { inserted, updated, total: json.data.length };
+  return { inserted, updated, total: allData.length };
 }
 
 // Cron: run daily

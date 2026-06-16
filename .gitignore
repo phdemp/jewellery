@@ -7,7 +7,13 @@ vite.config.ts.*
 
 # Secrets
 .env
+env.txt
 claude.local.md
+
+# DB dumps & data exports (never commit)
+*.sql
+*.xlsx
+database_dump.sql
 
 # Uploads & generated images (large binary files)
 uploads/

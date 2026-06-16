@@ -50,6 +50,47 @@ export interface DesignProject {
   generatedImageUrl: string;
 }
 
+// -- Authentication -----------------------------------------------------------
+
+export interface AuthStatus {
+  authenticated: boolean;
+  username: string | null;
+}
+
+export async function fetchAuthStatus(): Promise<AuthStatus> {
+  const response = await fetch('/api/auth/me', { credentials: 'include' });
+  if (!response.ok) {
+    return { authenticated: false, username: null };
+  }
+  return response.json();
+}
+
+export async function loginUser(
+  username: string,
+  password: string
+): Promise<{ authenticated: boolean }> {
+  const response = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.message || 'Invalid username or password');
+  }
+
+  return response.json();
+}
+
+export async function logoutUser(): Promise<void> {
+  await fetch('/api/auth/logout', {
+    method: 'POST',
+    credentials: 'include',
+  });
+}
+
 export async function uploadReferenceImage(
   file: File,
   themeCode?: string,
@@ -1045,6 +1086,7 @@ export interface LiveStockItem {
   memoClientName: string | null;
   memoSalesPersonName: string | null;
   memoDate: string | null;
+  productSegment: string | null;
   syncedAt: string;
 }
 
@@ -1068,6 +1110,7 @@ export interface StockSummary {
   categoryBreakdown: Array<{ category: string; count: number; costValue: number; tagValue: number }>;
   locationBreakdown: Array<{ location: string; count: number; costValue: number; tagValue: number }>;
   ageingBreakdown: Array<{ label: string; count: number; tagValue: number }>;
+  segmentBreakdown: Array<{ segment: string; count: number; tagValue: number }>;
   bdmBreakdown: Array<{ salesPerson: string; count: number; grossWt: number; costValue: number }>;
 }
 
@@ -1081,9 +1124,41 @@ export async function fetchStockItems(params: Record<string, string | number>): 
   return res.json();
 }
 
-export async function fetchStockSummary(): Promise<StockSummary> {
-  const res = await fetch("/api/stock-items/summary");
+export async function fetchStockSummary(ageingTag?: string): Promise<StockSummary> {
+  const url = ageingTag
+    ? `/api/stock-items/summary?ageingTag=${encodeURIComponent(ageingTag)}`
+    : "/api/stock-items/summary";
+  const res = await fetch(url);
   if (!res.ok) throw new Error("Failed to fetch stock summary");
+  return res.json();
+}
+
+// -- SKU Performance API (Top Sellers, aggregated live from live_sales) -------
+
+export interface SkuPerformanceItem {
+  styleCode: string;
+  category: string | null;
+  soldCount: number;
+  distinctClients: number;
+  totalRevenue: number;
+  avgSalePrice: number;
+  imageUrl: string | null;
+}
+
+export interface SkuPerformanceResponse {
+  items: SkuPerformanceItem[];
+  total: number;
+  page: number;
+  totalPages: number;
+}
+
+export async function fetchSkuPerformance(params: Record<string, string | number>): Promise<SkuPerformanceResponse> {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== "") query.set(k, String(v));
+  });
+  const res = await fetch("/api/sku-performance?" + query.toString());
+  if (!res.ok) throw new Error("Failed to fetch SKU performance");
   return res.json();
 }
 
@@ -1096,6 +1171,26 @@ export async function triggerStockSync(): Promise<{ inserted: number; updated: n
 export async function fetchLastSync(): Promise<{ lastSync: string | null }> {
   const res = await fetch("/api/stock-items/last-sync");
   if (!res.ok) throw new Error("Failed to fetch last sync");
+  return res.json();
+}
+
+export interface ClientRecommendation {
+  clientName: string;
+  state: string | null;
+  matchCount: number;
+  topSimilarity: number;
+  avgSimilarity: number;
+  score: number;
+  topMatch: { similarity: number; category: string | null; imageLink: string | null; tagPrice: number | null } | null;
+}
+
+export interface ClientRecommendationsResponse {
+  recommendations: ClientRecommendation[];
+}
+
+export async function fetchClientRecommendations(itemId: string): Promise<ClientRecommendationsResponse> {
+  const res = await fetch(`/api/stock-items/${itemId}/client-recommendations`);
+  if (!res.ok) throw new Error("Failed to fetch client recommendations");
   return res.json();
 }
 
@@ -1332,17 +1427,17 @@ export async function fetchOptimizationRuns(): Promise<{ items: OptimizationRunE
 // -- AI Assortment Scoring API -----------------------------------------------
 
 export interface ScoringWeights {
+  segment: number;
+  category: number;
   visual: number;
-  attribute: number;
-  velocity: number;
-  ageing: number;
+  price: number;
 }
 
 export const WEIGHT_PRESETS: Record<string, { label: string; weights: ScoringWeights; description: string }> = {
-  lookalike:  { label: "Look-alike",     weights: { visual: 80, attribute: 10, velocity: 5, ageing: 5 },   description: "Find pieces that LOOK exactly like what they bought" },
-  balanced:   { label: "Balanced",       weights: { visual: 60, attribute: 15, velocity: 15, ageing: 10 }, description: "Look-alike + market trends" },
-  trending:   { label: "Market Trends",  weights: { visual: 40, attribute: 20, velocity: 30, ageing: 10 }, description: "Focus on what is selling well in the market" },
-  clearance:  { label: "Move Old Stock", weights: { visual: 45, attribute: 15, velocity: 10, ageing: 30 }, description: "Help move older stock that matches their style" },
+  lookalike:  { label: "Look-alike",     weights: { segment: 20, category: 15, visual: 40, price: 25 },   description: "Find pieces that LOOK exactly like what they bought" },
+  balanced:   { label: "Balanced",       weights: { segment: 30, category: 25, visual: 25, price: 20 }, description: "Balanced across all dimensions" },
+  client:     { label: "Client Match",   weights: { segment: 25, category: 20, visual: 25, price: 30 }, description: "Maximize match to client's purchase history" },
+  clearance:  { label: "Move Old Stock", weights: { segment: 20, category: 20, visual: 30, price: 30 }, description: "Help move older stock that matches their style" },
 };
 
 export interface AiScoreRequest {
@@ -1353,14 +1448,18 @@ export interface AiScoreRequest {
   weightMin?: number;
   weightMax?: number;
   weights?: ScoringWeights;
+  // Period scope — when set, the BDM profile is built from dated live_sales
+  // restricted to these month names ("January"…) and/or calendar years.
+  months?: string[];
+  years?: number[];
 }
 
 export interface AiScoreBreakdown {
-  visual: number;
+  segment: number;
   category: number;
+  visual: number;
   price: number;
-  ageing: number;
-  uniqueness: number;
+  bonus: number;
 }
 
 export interface AiScoredItem {
@@ -1396,6 +1495,22 @@ export interface AiScoreProfile {
   preferredMotifs: string[];
   preferredFinishes: string[];
   stockTypePreference: Record<string, number>;
+  clientPreferences?: {
+    clientName: string;
+    totalTransactions: number;
+    primarySegments: string[];
+    segmentDistribution: Record<string, number>;
+    preferredCategories: string[];
+    priceRange: { min: number; max: number; median: number };
+    weightRange: { min: number; max: number; median: number };
+    stoneProfile: {
+      avgPolkiRatio: number;
+      avgDiamondRatio: number;
+      avgColorStoneRatio: number;
+      preferredColours: string[];
+      materialRatioPreference: string;
+    };
+  };
 }
 
 export interface AiScoreResponse {
@@ -1488,6 +1603,19 @@ export async function fetchB2bBdmList(): Promise<{ bdms: string[] }> {
   return response.json();
 }
 
+export async function fetchAssortmentSalesPeriods(
+  bdmName: string,
+  stateName?: string,
+  clientName?: string,
+): Promise<{ months: string[]; years: number[] }> {
+  const params = new URLSearchParams({ bdm: bdmName });
+  if (stateName) params.set("state", stateName);
+  if (clientName) params.set("client", clientName);
+  const response = await fetch(`/api/assortment/sales-periods?${params.toString()}`);
+  if (!response.ok) throw new Error("Failed to fetch sales periods");
+  return response.json();
+}
+
 export async function fetchStockCategories(): Promise<{ categories: string[] }> {
   const response = await fetch("/api/assortment/stock-categories");
   if (!response.ok) throw new Error("Failed to fetch stock categories");
@@ -1504,5 +1632,46 @@ export async function fetchB2bClientsForBdm(bdmName: string, stateName?: string)
   const params = stateName ? `?state=${encodeURIComponent(stateName)}` : "";
   const response = await fetch(`/api/b2b-sales/bdm/${encodeURIComponent(bdmName)}/clients${params}`);
   if (!response.ok) throw new Error("Failed to fetch clients");
+  return response.json();
+}
+
+// -- Live Sales Data API (ERP proxy) ------------------------------------------
+
+export interface SalesDataSummary {
+  totalRevenue: number;
+  totalTxns: number;
+  peakMonth: string;
+  peakRevenue: number;
+  topChannel: string;
+  topChannelRevenue: number;
+  topCategory: string;
+  topCategoryRevenue: number;
+}
+
+export interface SalesDataTransaction {
+  clientName: string;
+  state: string;
+  styleCode: string;
+  category: string;
+  transPrice: number;
+  tagPrice: number;
+  salesPerson: string;
+  transDate: string;
+  stock: string;
+  imageUrl: string;
+  saleType: string;
+}
+
+export interface SalesDataResponse {
+  summary: SalesDataSummary;
+  salesChannel: Array<{ SalesPersonName: string; revenue: number; count: number }>;
+  catRevenue: Array<{ CategoryGroup: string; revenue: number; count: number }>;
+  monthly: Array<{ month_str: string; revenue: number }>;
+  sales: SalesDataTransaction[];
+}
+
+export async function fetchSalesData(): Promise<SalesDataResponse> {
+  const response = await fetch("/api/sales-data");
+  if (!response.ok) throw new Error("Failed to fetch sales data");
   return response.json();
 }

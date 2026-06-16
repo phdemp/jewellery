@@ -25,7 +25,7 @@ export default function VisualCatalogue() {
   // Live API: fetch categories from summary
   const { data: summary } = useQuery({
     queryKey: ["stock-summary"],
-    queryFn: fetchStockSummary,
+    queryFn: () => fetchStockSummary(),
   });
 
   const categories = useMemo(() => {

@@ -60,12 +60,12 @@ export async function searchSimilarFeedback(
     const vectorStr = `[${queryEmbedding.join(",")}]`;
     const results = await db.execute(sql`
       SELECT id, feedback_text, sentiment, tags,
-             1 - (embedding_vector::halfvec(3072) <=> ${vectorStr}::halfvec(3072)) as similarity
+             1 - (embedding_vector::vector(3072) <=> ${vectorStr}::vector(3072)) as similarity
       FROM design_feedback
       WHERE embedding_vector IS NOT NULL
         AND category = ${category}
         AND theme = ${theme}
-      ORDER BY embedding_vector::halfvec(3072) <=> ${vectorStr}::halfvec(3072)
+      ORDER BY embedding_vector::vector(3072) <=> ${vectorStr}::vector(3072)
       LIMIT ${topK}
     `);
 

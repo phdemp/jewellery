@@ -1,11 +1,21 @@
 import { useState, useMemo } from "react";
-import { DATA } from "../lib/intelligence-data";
+import { useQuery } from "@tanstack/react-query";
+import { fetchSalesData } from "@/lib/api";
 import { fmt, fmtN } from "../lib/intelligence-utils";
 import { cn } from "@/lib/utils";
-import { SALES_PER_PAGE, SHORT_MONTHS, MONTH_NAMES } from "../lib/intelligence-constants";
-import { Search, IndianRupee, CalendarDays, Store, Tag } from "lucide-react";
+import { SALES_PER_PAGE } from "../lib/intelligence-constants";
+import { Search, IndianRupee, CalendarDays, Store, Tag, Loader2 } from "lucide-react";
 
 /* ---------- helpers ---------- */
+
+const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Parse "YYYY-MM" to short month name, e.g. "2025-04" -> "Apr" */
+function monthLabel(monthStr: string): string {
+  const parts = monthStr.split("-");
+  const moNum = parseInt(parts[1], 10);
+  return MONTH_SHORT[moNum - 1] || monthStr;
+}
 
 function pct(value: number, max: number): number {
   return max > 0 ? (value / max) * 100 : 0;
@@ -122,7 +132,54 @@ export default function SalesAnalysis() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
 
-  const { summary, salesChannel, catRevenue, monthly, sales } = DATA;
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["sales-data"],
+    queryFn: fetchSalesData,
+    staleTime: 15 * 60 * 1000,
+  });
+
+  const sales = data?.sales;
+
+  /* sales table — useMemo must be called before any early return */
+  const filtered = useMemo(() => {
+    if (!sales) return [];
+    const q = search.toLowerCase().trim();
+    if (!q) return sales;
+    return sales.filter(
+      (s) =>
+        s.clientName.toLowerCase().includes(q) ||
+        s.styleCode.toLowerCase().includes(q) ||
+        s.category.toLowerCase().includes(q) ||
+        s.salesPerson.toLowerCase().includes(q) ||
+        s.state.toLowerCase().includes(q)
+    );
+  }, [sales, search]);
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 gap-3">
+        <Loader2 className="w-8 h-8 animate-spin text-[#C9A84C]" />
+        <p className="text-[13px] text-[#6B6458]" style={{ fontFamily: "'DM Mono', monospace" }}>
+          Loading live sales data...
+        </p>
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 gap-3">
+        <p className="text-[14px] text-red-600 font-medium">
+          Failed to load sales data
+        </p>
+        <p className="text-[12px] text-[#6B6458]">
+          {error instanceof Error ? error.message : "Unknown error"}
+        </p>
+      </div>
+    );
+  }
+
+  const { summary, salesChannel, catRevenue, monthly } = data;
 
   /* channel bars */
   const channelBars: BarItem[] = salesChannel.map((ch) => ({
@@ -141,21 +198,6 @@ export default function SalesAnalysis() {
   /* monthly bars */
   const maxMonthly = Math.max(...monthly.map((m) => m.revenue), 1);
 
-  /* sales table */
-  const filtered = useMemo(() => {
-    if (!sales) return [];
-    const q = search.toLowerCase().trim();
-    if (!q) return sales;
-    return sales.filter(
-      (s) =>
-        s.clientName.toLowerCase().includes(q) ||
-        s.styleCode.toLowerCase().includes(q) ||
-        s.category.toLowerCase().includes(q) ||
-        s.salesPerson.toLowerCase().includes(q) ||
-        s.state.toLowerCase().includes(q)
-    );
-  }, [sales, search]);
-
   const totalPages = Math.max(1, Math.ceil(filtered.length / SALES_PER_PAGE));
   const safePage = Math.min(page, totalPages);
   const pageRows = filtered.slice(
@@ -165,7 +207,7 @@ export default function SalesAnalysis() {
 
   /* B2B count = total sold - B2C txns */
   const b2cCount = summary.totalTxns;
-  const totalSold = DATA.summary.totalRevenue;
+  const totalSold = summary.totalRevenue;
 
   return (
     <div className="space-y-6">
@@ -223,12 +265,7 @@ export default function SalesAnalysis() {
         <div className="flex items-end gap-2" style={{ height: 180 }}>
           {monthly.map((m) => {
             const h = pct(m.revenue, maxMonthly);
-            const label =
-              SHORT_MONTHS[
-                monthly.indexOf(m) < SHORT_MONTHS.length
-                  ? monthly.indexOf(m)
-                  : 0
-              ] || m.month_str;
+            const label = monthLabel(m.month_str);
             return (
               <div
                 key={m.month_str}

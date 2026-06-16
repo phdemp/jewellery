@@ -39,11 +39,11 @@ export async function searchSimilarVectors(
       SELECT 
         id,
         metadata,
-        1 - (embedding_vector::halfvec(3072) <=> ${vectorStr}::halfvec(3072)) as similarity
+        1 - (embedding_vector::vector(3072) <=> ${vectorStr}::vector(3072)) as similarity
       FROM reference_images
       WHERE embedding_vector IS NOT NULL
         AND theme_code = ${themeCode}
-      ORDER BY embedding_vector::halfvec(3072) <=> ${vectorStr}::halfvec(3072)
+      ORDER BY embedding_vector::vector(3072) <=> ${vectorStr}::vector(3072)
       LIMIT ${topK}
     `);
   } else {
@@ -51,10 +51,10 @@ export async function searchSimilarVectors(
       SELECT 
         id,
         metadata,
-        1 - (embedding_vector::halfvec(3072) <=> ${vectorStr}::halfvec(3072)) as similarity
+        1 - (embedding_vector::vector(3072) <=> ${vectorStr}::vector(3072)) as similarity
       FROM reference_images
       WHERE embedding_vector IS NOT NULL
-      ORDER BY embedding_vector::halfvec(3072) <=> ${vectorStr}::halfvec(3072)
+      ORDER BY embedding_vector::vector(3072) <=> ${vectorStr}::vector(3072)
       LIMIT ${topK}
     `);
   }

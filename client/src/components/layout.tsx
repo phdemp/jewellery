@@ -1,7 +1,11 @@
 import { ReactNode, useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
+import { LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { OrnamentalDivider } from "@/components/ornamental-divider";
+import { logoutUser } from "@/lib/api";
+import { queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 function RaniwalaLogo() {
   return (
@@ -23,12 +27,22 @@ function RaniwalaLogo() {
 export function Layout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const [scrolled, setScrolled] = useState(false);
+  const { toast } = useToast();
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 20);
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
+
+  const handleSignOut = async () => {
+    try {
+      await logoutUser();
+    } finally {
+      await queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      toast({ title: "Signed out" });
+    }
+  };
 
   return (
     <div className="min-h-screen flex flex-col font-sans bg-background text-foreground relative overflow-hidden">
@@ -114,6 +128,16 @@ export function Layout({ children }: { children: ReactNode }) {
                 Feedback
               </span>
             </Link>
+            <button
+              type="button"
+              onClick={handleSignOut}
+              data-testid="nav-sign-out"
+              className="flex items-center gap-1.5 cursor-pointer text-muted-foreground hover:text-primary transition-colors"
+              title="Sign out"
+            >
+              <LogOut className="h-4 w-4" />
+              <span>Sign out</span>
+            </button>
           </nav>
         </div>
       </header>

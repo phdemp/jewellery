@@ -92,6 +92,9 @@ export interface IStorage {
   // B2B Sales History methods
   bulkCreateB2bSalesHistory(data: InsertB2bSalesHistory[]): Promise<void>;
   getB2bSalesByBdm(bdmName: string, stateName?: string, clientName?: string): Promise<B2bSalesHistory[]>;
+  // Live-sales (ERP, dated) variant — scopes a BDM's sales by month/year for period-filtered profiling
+  getLiveSalesByBdm(bdmName: string, opts: { months?: string[]; years?: number[]; stateName?: string; clientName?: string }): Promise<B2bSalesHistory[]>;
+  getLiveSalesPeriods(bdmName: string, stateName?: string, clientName?: string): Promise<{ months: string[]; years: number[] }>;
   getDistinctB2bBdmNames(): Promise<string[]>;
   getB2bClientsForBdm(bdmName: string, stateName?: string): Promise<Array<{ name: string; spend: number; count: number }>>;
   getB2bStatesForBdm(bdmName: string): Promise<string[]>;
@@ -363,6 +366,132 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(b2bSalesHistory)
       .where(sql.join(conditions, sql` AND `))
       .orderBy(desc(b2bSalesHistory.finalPrice));
+  }
+
+  // Derive product segment from a style/theme code (server-side mirror of the
+  // client getSegmentFromStyle helper) so live-sales profiles carry segments.
+  private deriveSegmentFromStyle(styleCode: string | null, category: string | null): string | null {
+    if (!styleCode) return null;
+    const u = styleCode.toUpperCase();
+    const c = (category || "").toLowerCase();
+    if (u.includes("BRP") || u.includes("BRU")) return "Bridal";
+    if (u.includes("BRC")) return "Bridal Lite";
+    if (u.includes("SOP") || u.includes("SOLP")) return "Exclusive - Grandeur";
+    if (u.includes("WRD") || u.includes("SOO") || u.includes("SOD")) {
+      if (c.includes("chain") || c.includes("pendant")) return "RTW";
+      if (c.includes("earring") || c.includes("stud") || c.includes("drop") || c.includes("hoop")) return "Ear Essentials";
+      if (c.includes("bracelet") || c.includes("bangle") || c.includes("hathphool") || c.includes("ring")) return "Handwear";
+      if (c.includes("nosepin") || c.includes("nath") || c.includes("mangtika") || c.includes("brooch") || c.includes("button") || c.includes("kalingi") || c.includes("kanauti") || c.includes("mala")) return "Add-ons";
+      return "Modern";
+    }
+    if (u.includes("CLO") || u.includes("CLP") || u.includes("WRO")) return "Traditional";
+    return "Traditional";
+  }
+
+  async getLiveSalesByBdm(
+    bdmName: string,
+    opts: { months?: string[]; years?: number[]; stateName?: string; clientName?: string },
+  ): Promise<B2bSalesHistory[]> {
+    const conditions = [sql`sales_person_name = ${bdmName}`];
+    if (opts.stateName) conditions.push(sql`state_name = ${opts.stateName}`);
+    if (opts.clientName) conditions.push(sql`client_name = ${opts.clientName}`);
+    if (opts.months && opts.months.length > 0) {
+      conditions.push(sql`transaction_month IN (${sql.join(opts.months.map((m) => sql`${m}`), sql`, `)})`);
+    }
+    if (opts.years && opts.years.length > 0) {
+      conditions.push(sql`transaction_year IN (${sql.join(opts.years.map((y) => sql`${y}`), sql`, `)})`);
+    }
+
+    const result = await db.execute(sql`
+      SELECT jewel_code, style_code, client_name, state_name, category,
+             transaction_amt, tag_price, pure_weight, stock_type, image_url
+      FROM live_sales
+      WHERE ${sql.join(conditions, sql` AND `)}
+      ORDER BY transaction_amt DESC NULLS LAST
+    `);
+
+    interface LiveSalesRow {
+      jewel_code: string | null;
+      style_code: string | null;
+      client_name: string | null;
+      state_name: string | null;
+      category: string | null;
+      transaction_amt: number | null;
+      tag_price: number | null;
+      pure_weight: string | null;
+      stock_type: string | null;
+      image_url: string | null;
+    }
+
+    // Map live_sales rows into B2bSalesHistory shape so the existing scorer
+    // (buildMetadataProfile / extractClientPreferences) consumes them unchanged.
+    // Fields live_sales lacks (motif, finish, gross/diamond weight, embeddings)
+    // are null; gross weight uses pure weight as a proxy.
+    return (result.rows as unknown as LiveSalesRow[]).map((r) => ({
+      id: "",
+      salesPersonName: bdmName,
+      clientName: r.client_name,
+      stateName: r.state_name,
+      clientCity: null,
+      imageLink: r.image_url,
+      jewelCode: r.jewel_code,
+      styleCode: r.style_code,
+      category: r.category,
+      categoryGroup: r.category,
+      tagPrice: r.tag_price,
+      finalPrice: r.transaction_amt,
+      transPrice: r.transaction_amt,
+      grossWt: r.pure_weight,
+      pureWt: r.pure_weight,
+      totDiaWt: null,
+      baseMetalQuality: null,
+      stockType: r.stock_type,
+      subCategory: null,
+      makeType: null,
+      motif: null,
+      motifCategory: null,
+      productSegment: this.deriveSegmentFromStyle(r.style_code, r.category),
+      designShape: null,
+      finish: null,
+      stoneColour: null,
+      materialRatio: null,
+      importedAt: new Date(),
+      embeddingVector: null,
+      embeddingStatus: null,
+    }));
+  }
+
+  async getLiveSalesPeriods(
+    bdmName: string,
+    stateName?: string,
+    clientName?: string,
+  ): Promise<{ months: string[]; years: number[] }> {
+    const conditions = [sql`sales_person_name = ${bdmName}`];
+    if (stateName) conditions.push(sql`state_name = ${stateName}`);
+    if (clientName) conditions.push(sql`client_name = ${clientName}`);
+
+    const result = await db.execute(sql`
+      SELECT DISTINCT transaction_month, transaction_year
+      FROM live_sales
+      WHERE ${sql.join(conditions, sql` AND `)}
+        AND transaction_month IS NOT NULL
+        AND transaction_year IS NOT NULL
+    `);
+
+    const rows = result.rows as unknown as { transaction_month: string; transaction_year: number }[];
+    const MONTH_ORDER: Record<string, number> = {
+      January: 0, February: 1, March: 2, April: 3, May: 4, June: 5,
+      July: 6, August: 7, September: 8, October: 9, November: 10, December: 11,
+    };
+    const monthSet = new Set<string>();
+    const yearSet = new Set<number>();
+    for (const r of rows) {
+      if (r.transaction_month) monthSet.add(r.transaction_month);
+      if (r.transaction_year != null) yearSet.add(r.transaction_year);
+    }
+    const months = Array.from(monthSet).sort((a, b) => (MONTH_ORDER[a] ?? 99) - (MONTH_ORDER[b] ?? 99));
+    const years = Array.from(yearSet).sort((a, b) => b - a);
+    return { months, years };
   }
 
   async getDistinctB2bBdmNames(): Promise<string[]> {

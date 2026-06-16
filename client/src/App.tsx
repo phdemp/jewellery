@@ -1,9 +1,12 @@
 import * as Sentry from "@sentry/react";
 import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { Loader2 } from "lucide-react";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { fetchAuthStatus } from "@/lib/api";
+import Login from "@/pages/login";
 import Home from "@/pages/home";
 import References from "@/pages/references";
 import Comparison from "@/pages/comparison";
@@ -32,6 +35,29 @@ function Router() {
   );
 }
 
+function AuthGate() {
+  const { data, isLoading } = useQuery({
+    queryKey: ["/api/auth/me"],
+    queryFn: fetchAuthStatus,
+    staleTime: Infinity,
+    retry: false,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!data?.authenticated) {
+    return <Login />;
+  }
+
+  return <Router />;
+}
+
 function ErrorFallback() {
   return (
     <div className="flex min-h-screen items-center justify-center">
@@ -52,7 +78,7 @@ function App() {
       <TooltipProvider>
         <Toaster />
         <Sentry.ErrorBoundary fallback={<ErrorFallback />}>
-          <Router />
+          <AuthGate />
         </Sentry.ErrorBoundary>
       </TooltipProvider>
     </QueryClientProvider>

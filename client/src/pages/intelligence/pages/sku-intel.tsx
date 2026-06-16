@@ -19,13 +19,14 @@ import {
   PieChart,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchStockItems, fetchStockSummary } from "@/lib/api";
+import { fetchStockItems, fetchStockSummary, fetchSkuPerformance } from "@/lib/api";
 import type { LiveStockItem } from "@/lib/api";
 
 const MONO = "'DM Mono', monospace";
 const SERIF = "'Cormorant Garamond', serif";
 
 const DEAD_PER_PAGE = 30;
+const TOP_PER_PAGE = 30;
 
 type TabId = "top-sellers" | "dead-stock" | "assortment-mix";
 
@@ -35,13 +36,12 @@ const TABS: Array<{ id: TabId; label: string; icon: React.ReactNode }> = [
   { id: "assortment-mix", label: "Assortment Mix", icon: <PieChart className="w-3.5 h-3.5" /> },
 ];
 
-type SortKey = "composite" | "units" | "turnaround" | "gp" | "clients";
+type SortKey = "composite" | "units" | "revenue" | "clients";
 
 const SORT_OPTIONS: Array<{ value: SortKey; label: string }> = [
-  { value: "composite", label: "All 4 Parameters" },
+  { value: "composite", label: "Units + Revenue" },
   { value: "units", label: "Units Sold" },
-  { value: "turnaround", label: "Fastest Turnaround" },
-  { value: "gp", label: "GP%" },
+  { value: "revenue", label: "Total Revenue" },
   { value: "clients", label: "Distinct Clients" },
 ];
 
@@ -50,7 +50,7 @@ export default function SkuIntelPage() {
 
   const { data: liveSummary } = useQuery({
     queryKey: ["stock-summary"],
-    queryFn: fetchStockSummary,
+    queryFn: () => fetchStockSummary(),
   });
   const deadStockBadgeCount = liveSummary?.deadStockCount ?? 427;
 
@@ -120,28 +120,26 @@ export default function SkuIntelPage() {
 
 function TopSellersTab() {
   const [sortBy, setSortBy] = useState<SortKey>("composite");
-  const topSkus = DATA.topSkus;
+  const [page, setPage] = useState(1);
 
-  const sorted = useMemo(() => {
-    const items = [...topSkus];
-    switch (sortBy) {
-      case "units":
-        items.sort((a, b) => b.soldCount - a.soldCount);
-        break;
-      case "turnaround":
-        items.sort((a, b) => a.avgMakeDays - b.avgMakeDays);
-        break;
-      case "gp":
-        items.sort((a, b) => b.gpPct - a.gpPct);
-        break;
-      case "clients":
-        items.sort((a, b) => b.clientCount - a.clientCount);
-        break;
-      default:
-        items.sort((a, b) => b.compositeScore - a.compositeScore);
-    }
-    return items;
-  }, [topSkus, sortBy]);
+  // Reset to first page whenever the sort changes
+  const onSortChange = (v: SortKey) => {
+    setSortBy(v);
+    setPage(1);
+  };
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["sku-performance", sortBy, page],
+    queryFn: () => fetchSkuPerformance({
+      sortBy,
+      page,
+      limit: TOP_PER_PAGE,
+    }),
+  });
+
+  const items = data?.items ?? [];
+  const totalItems = data?.total ?? 0;
+  const totalPages = data?.totalPages ?? 1;
 
   const THStyle: React.CSSProperties = {
     fontFamily: MONO,
@@ -159,13 +157,13 @@ function TopSellersTab() {
           className="text-xs text-[#1A1814]/50"
           style={{ fontFamily: MONO }}
         >
-          {topSkus.length} style codes ranked
+          {totalItems.toLocaleString("en-IN")} style codes ranked
         </p>
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-[#1A1814]/40" style={{ fontFamily: MONO }}>
             Sort by:
           </span>
-          <Select value={sortBy} onValueChange={(v) => setSortBy(v as SortKey)}>
+          <Select value={sortBy} onValueChange={(v) => onSortChange(v as SortKey)}>
             <SelectTrigger
               className="h-8 w-[180px] text-xs border-[#D4C9A8] bg-white"
               style={{ fontFamily: MONO, fontSize: "11px" }}
@@ -181,6 +179,12 @@ function TopSellersTab() {
         </div>
       </div>
 
+      {isLoading ? (
+        <div className="flex items-center justify-center h-64">
+          <div className="text-[#6B6458] text-sm" style={{ fontFamily: MONO }}>Loading top sellers...</div>
+        </div>
+      ) : (
+      <>
       {/* Table */}
       <div
         className="rounded-lg border overflow-hidden"
@@ -193,17 +197,18 @@ function TopSellersTab() {
                 <th className="px-3 py-2.5 text-left" style={THStyle}>Image</th>
                 <th className="px-3 py-2.5 text-center" style={THStyle}>Rank</th>
                 <th className="px-3 py-2.5 text-left" style={THStyle}>Style Code</th>
+                <th className="px-3 py-2.5 text-left" style={THStyle}>Category</th>
                 <th className="px-3 py-2.5 text-right" style={THStyle}>Units Sold</th>
-                <th className="px-3 py-2.5 text-right" style={THStyle}>Avg Make Days</th>
-                <th className="px-3 py-2.5 text-right" style={THStyle}>GP%</th>
+                <th className="px-3 py-2.5 text-right" style={THStyle}>Revenue</th>
+                <th className="px-3 py-2.5 text-right" style={THStyle}>Avg Sale Price</th>
                 <th className="px-3 py-2.5 text-right" style={THStyle}>Distinct Clients</th>
                 <th className="px-3 py-2.5 text-center" style={THStyle}>Tag</th>
               </tr>
             </thead>
             <tbody>
-              {sorted.map((sku, idx) => {
-                const imgSrc = getDriveImgUrl(sku.imageUrl);
-                const rank = idx + 1;
+              {items.map((sku, idx) => {
+                const imgSrc = getDriveImgUrl(sku.imageUrl ?? "");
+                const rank = (page - 1) * TOP_PER_PAGE + idx + 1;
                 const rankColor =
                   rank === 1 ? "text-[#C9A84C]" :
                   rank === 2 ? "text-[#6B6458]" :
@@ -247,6 +252,7 @@ function TopSellersTab() {
                     >
                       {sku.styleCode}
                     </td>
+                    <td className="px-3 py-2 text-[#1A1814]/70">{sku.category ?? "--"}</td>
                     <td
                       className="px-3 py-2 text-right text-[#1A1814]"
                       style={{ fontFamily: MONO, fontSize: "11px" }}
@@ -254,28 +260,22 @@ function TopSellersTab() {
                       {sku.soldCount}
                     </td>
                     <td
+                      className="px-3 py-2 text-right text-[#1A1814]"
+                      style={{ fontFamily: MONO, fontSize: "11px" }}
+                    >
+                      {fmt(sku.totalRevenue)}
+                    </td>
+                    <td
                       className="px-3 py-2 text-right text-[#1A1814]/60"
                       style={{ fontFamily: MONO, fontSize: "11px" }}
                     >
-                      {sku.avgMakeDays}d
-                    </td>
-                    <td
-                      className="px-3 py-2 text-right"
-                      style={{ fontFamily: MONO, fontSize: "11px" }}
-                    >
-                      <span className={cn(
-                        sku.gpPct >= 25 ? "text-[#2D6B42]" :
-                        sku.gpPct >= 15 ? "text-[#8B5E00]" :
-                        "text-[#8B3A00]"
-                      )}>
-                        {sku.gpPct.toFixed(1)}%
-                      </span>
+                      {fmt(sku.avgSalePrice)}
                     </td>
                     <td
                       className="px-3 py-2 text-right text-[#1A1814]/70"
                       style={{ fontFamily: MONO, fontSize: "11px" }}
                     >
-                      {sku.clientCount}
+                      {sku.distinctClients}
                     </td>
                     <td className="px-3 py-2 text-center">
                       {rank <= 5 ? (
@@ -299,6 +299,67 @@ function TopSellersTab() {
           </table>
         </div>
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between">
+          <p
+            className="text-[11px] text-[#1A1814]/40"
+            style={{ fontFamily: MONO }}
+          >
+            Page {page} of {totalPages} &middot; {totalItems.toLocaleString("en-IN")} style codes
+          </p>
+          <div className="flex items-center gap-1.5">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="h-7 w-7 p-0 border-[#D4C9A8]"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" />
+            </Button>
+            {buildPageNumbers(page, totalPages).map((pn, idx) =>
+              pn === "..." ? (
+                <span
+                  key={`ellipsis-${idx}`}
+                  className="text-[11px] text-[#1A1814]/30 px-1"
+                  style={{ fontFamily: MONO }}
+                >
+                  ...
+                </span>
+              ) : (
+                <Button
+                  key={pn}
+                  variant={pn === page ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setPage(pn as number)}
+                  className={cn(
+                    "h-7 min-w-7 px-2 text-xs border-[#D4C9A8]",
+                    pn === page
+                      ? "bg-[#C9A84C] text-[#1A1814] hover:bg-[#8B6914] border-[#C9A84C]"
+                      : "hover:bg-[#F5F1E8]"
+                  )}
+                  style={{ fontFamily: MONO }}
+                >
+                  {pn}
+                </Button>
+              )
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page >= totalPages}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              className="h-7 w-7 p-0 border-[#D4C9A8]"
+            >
+              <ChevronRight className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
+      </>
+      )}
     </div>
   );
 }
@@ -527,7 +588,7 @@ function DeadStockTab() {
 function AssortmentMixTab() {
   const { data: liveSummary, isLoading } = useQuery({
     queryKey: ["stock-summary"],
-    queryFn: fetchStockSummary,
+    queryFn: () => fetchStockSummary(),
   });
 
   // Fallback to static data if live is not available

@@ -27,7 +27,25 @@ function getAI(): GoogleGenAI {
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
+export interface ClientPreferences {
+  clientName: string;
+  totalTransactions: number;
+  primarySegments: string[];
+  segmentDistribution: Record<string, number>;
+  preferredCategories: string[];
+  priceRange: { min: number; max: number; median: number };
+  weightRange: { min: number; max: number; median: number };
+  stoneProfile: {
+    avgPolkiRatio: number;
+    avgDiamondRatio: number;
+    avgColorStoneRatio: number;
+    preferredColours: string[];
+    materialRatioPreference: string;
+  };
+}
+
 export interface BdmStyleProfile {
+  preferredSegments: string[];
   preferredCategories: string[];
   priceRange: { min: number; max: number; sweet_spot: number };
   visualPatterns: string[];
@@ -35,14 +53,15 @@ export interface BdmStyleProfile {
   preferredFinishes: string[];
   stockTypePreference: Record<string, number>;
   summary: string;
+  clientPreferences?: ClientPreferences;
 }
 
 export interface ScoreBreakdown {
-  visual: number;
-  category: number;
-  price: number;
-  ageing: number;
-  uniqueness: number;
+  segment: number;   // 0-1 normalized
+  category: number;  // 0-1 normalized
+  visual: number;    // 0-1 normalized (composite of stones + motifs)
+  price: number;     // 0-1 normalized
+  bonus: number;     // Additive (location boost)
 }
 
 export interface ScoredItemReason {
@@ -72,6 +91,11 @@ export interface InventoryCandidate {
   imageUrl: string;
   baseMetal: string;
   currentStatus: string;
+  productSegment: string;
+  totPolkiWt: string;
+  totColorStoneWt: string;
+  motif: string;
+  motifCategory: string;
 }
 
 export interface AiScoreResult {
@@ -203,36 +227,50 @@ interface VectorScoredRow {
   base_metal: string;
   current_status: string;
   similarity: number;
+  product_segment: string;
+  tot_polki_wt: string;
+  tot_color_stone_wt: string;
+  motif: string;
+  motif_category: string;
 }
 
 async function searchSimilarStock(
   profileVector: number[],
   limit: number,
   weightMin?: number,
-  weightMax?: number
+  weightMax?: number,
+  segmentFilter?: string[]
 ): Promise<VectorScoredRow[]> {
   const vectorStr = `[${profileVector.join(",")}]`;
 
-  let whereClause = `current_status = 'On Hand'
-    AND embedding_vector IS NOT NULL
-    AND embedding_status = 'done'`;
+  let whereClause = `ls.current_status = 'On Hand'
+    AND ls.embedding_vector IS NOT NULL
+    AND ls.embedding_status = 'done'`;
 
   if (weightMin) {
-    whereClause += ` AND CAST(NULLIF(TRIM(gross_wt), '') AS NUMERIC) >= ${Number(weightMin)}`;
+    whereClause += ` AND CAST(NULLIF(TRIM(ls.gross_wt), '') AS NUMERIC) >= ${Number(weightMin)}`;
   }
   if (weightMax) {
-    whereClause += ` AND CAST(NULLIF(TRIM(gross_wt), '') AS NUMERIC) <= ${Number(weightMax)}`;
+    whereClause += ` AND CAST(NULLIF(TRIM(ls.gross_wt), '') AS NUMERIC) <= ${Number(weightMax)}`;
+  }
+  if (segmentFilter && segmentFilter.length > 0) {
+    const escaped = segmentFilter.map(s => `'${s.replace(/'/g, "''")}'`).join(",");
+    whereClause += ` AND ls.product_segment IN (${escaped})`;
   }
 
   const result = await db.execute(sql.raw(`
     SELECT
-      jewel_code, style_no, category, tag_price, cost_price,
-      ageing_days, gross_wt, pure_wt, tot_dia_wt, stock_type,
-      location, image_url, base_metal, current_status,
-      1 - (embedding_vector::halfvec(3072) <=> '${vectorStr}'::halfvec(3072)) as similarity
-    FROM live_stock_items
+      ls.jewel_code, ls.style_no, ls.category, ls.tag_price, ls.cost_price,
+      ls.ageing_days, ls.gross_wt, ls.pure_wt, ls.tot_dia_wt, ls.stock_type,
+      ls.location, ls.image_url, ls.base_metal, ls.current_status,
+      ls.product_segment, ls.tot_polki_wt, ls.tot_color_stone_wt,
+      COALESCE(si.motif, '') as motif,
+      COALESCE(si.motif_category, '') as motif_category,
+      1 - (ls.embedding_vector::vector(3072) <=> '${vectorStr}'::vector(3072)) as similarity
+    FROM live_stock_items ls
+    LEFT JOIN stock_items si ON si.jewel_code = ls.jewel_code
     WHERE ${whereClause}
-    ORDER BY embedding_vector::halfvec(3072) <=> '${vectorStr}'::halfvec(3072)
+    ORDER BY ls.embedding_vector::vector(3072) <=> '${vectorStr}'::vector(3072)
     LIMIT ${limit}
   `));
 
@@ -252,8 +290,74 @@ async function searchSimilarStock(
     base_metal: String(row.base_metal || ""),
     current_status: String(row.current_status || ""),
     similarity: parseFloat(String(row.similarity)) || 0,
+    product_segment: String(row.product_segment || ""),
+    tot_polki_wt: String(row.tot_polki_wt || "0"),
+    tot_color_stone_wt: String(row.tot_color_stone_wt || "0"),
+    motif: String(row.motif || ""),
+    motif_category: String(row.motif_category || ""),
   }));
 }
+
+// ── Step 2b: Fetch raw stock candidates (no embeddings required) ────────────
+// Used as fallback when vector search returns 0 results because stock items
+// lack embeddings even though BDM sales have them.
+
+async function fetchRawStockCandidates(
+  limit: number,
+  weightMin?: number,
+  weightMax?: number,
+  segmentFilter?: string[]
+): Promise<InventoryCandidate[]> {
+  let whereClause = `ls.current_status = 'On Hand'`;
+
+  if (weightMin) {
+    whereClause += ` AND CAST(NULLIF(TRIM(ls.gross_wt), '') AS NUMERIC) >= ${Number(weightMin)}`;
+  }
+  if (weightMax) {
+    whereClause += ` AND CAST(NULLIF(TRIM(ls.gross_wt), '') AS NUMERIC) <= ${Number(weightMax)}`;
+  }
+  if (segmentFilter && segmentFilter.length > 0) {
+    const escaped = segmentFilter.map(s => `'${s.replace(/'/g, "''")}'`).join(",");
+    whereClause += ` AND ls.product_segment IN (${escaped})`;
+  }
+
+  const result = await db.execute(sql.raw(`
+    SELECT ls.jewel_code, ls.style_no, ls.category, ls.tag_price, ls.cost_price,
+           ls.ageing_days, ls.gross_wt, ls.pure_wt, ls.tot_dia_wt, ls.stock_type,
+           ls.location, ls.image_url, ls.base_metal, ls.current_status,
+           ls.product_segment, ls.tot_polki_wt, ls.tot_color_stone_wt,
+           COALESCE(si.motif, '') as motif,
+           COALESCE(si.motif_category, '') as motif_category
+    FROM live_stock_items ls
+    LEFT JOIN stock_items si ON si.jewel_code = ls.jewel_code
+    WHERE ${whereClause}
+    ORDER BY ls.tag_price DESC
+    LIMIT ${limit}
+  `));
+
+  return (result.rows as Record<string, unknown>[]).map(row => ({
+    jewelCode: String(row.jewel_code || ""),
+    styleNo: String(row.style_no || ""),
+    category: String(row.category || ""),
+    tagPrice: Number(row.tag_price) || 0,
+    costPrice: Number(row.cost_price) || 0,
+    ageingDays: Number(row.ageing_days) || 0,
+    grossWt: String(row.gross_wt || "0"),
+    pureWt: String(row.pure_wt || "0"),
+    totDiaWt: String(row.tot_dia_wt || "0"),
+    stockType: String(row.stock_type || ""),
+    location: String(row.location || ""),
+    imageUrl: String(row.image_url || ""),
+    baseMetal: String(row.base_metal || ""),
+    currentStatus: String(row.current_status || ""),
+    productSegment: String(row.product_segment || ""),
+    totPolkiWt: String(row.tot_polki_wt || "0"),
+    totColorStoneWt: String(row.tot_color_stone_wt || "0"),
+    motif: String(row.motif || ""),
+    motifCategory: String(row.motif_category || ""),
+  }));
+}
+
 
 // ── Step 3: Text-only BDM profile (one Gemini call) ───────────────────────
 
@@ -286,6 +390,7 @@ ${itemsMetadata}
 
 Respond with ONLY valid JSON:
 {
+  "preferredSegments": ["top 3 product segments"],
   "preferredCategories": ["top 3-5 categories"],
   "priceRange": { "min": <number>, "max": <number>, "sweet_spot": <number> },
   "visualPatterns": ["2-3 style patterns inferred from metadata"],
@@ -309,6 +414,7 @@ Respond with ONLY valid JSON:
   const parsed = JSON.parse(jsonStr);
 
   return {
+    preferredSegments: parsed.preferredSegments || [],
     preferredCategories: parsed.preferredCategories || [],
     priceRange: parsed.priceRange || { min: 0, max: 0, sweet_spot: 0 },
     visualPatterns: parsed.visualPatterns || [],
@@ -321,6 +427,7 @@ Respond with ONLY valid JSON:
 
 function buildFallbackProfile(bdmName: string): BdmStyleProfile {
   return {
+    preferredSegments: [],
     preferredCategories: ["Necklace Set", "Choker", "Bangle"],
     priceRange: { min: 100000, max: 500000, sweet_spot: 250000 },
     visualPatterns: ["General luxury jewellery"],
@@ -354,18 +461,30 @@ function locationBoost(location: string | undefined): { boost: number; reason: s
 
 /** BDM-configurable scoring weights (must sum to 100). */
 export interface ScoringWeights {
+  segment: number;
+  category: number;
   visual: number;
-  attribute: number;
-  velocity: number;
-  ageing: number;
+  price: number;
 }
 
-const DEFAULT_WEIGHTS: ScoringWeights = { visual: 60, attribute: 15, velocity: 15, ageing: 10 };
+const DEFAULT_WEIGHTS: ScoringWeights = { segment: 30, category: 25, visual: 25, price: 20 };
 
 /** Similarity range from the result set — used to normalize visual scores. */
 interface SimRange {
   min: number;
   max: number;
+}
+
+/** Cosine similarity between two 3D vectors (stone composition). */
+function stoneCosineSim(a: number[], b: number[]): number {
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < 3; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  if (normA === 0 || normB === 0) return 0.3; // no data fallback
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
 function scoreCandidate(
@@ -374,71 +493,91 @@ function scoreCandidate(
   _simRange: SimRange,
   weights: ScoringWeights = DEFAULT_WEIGHTS
 ): AiScoredItem & { inventoryData: InventoryCandidate } {
-  const similarity = row.similarity;
-  const ageingDays = row.ageing_days;
-  const ageTag = ageingDays <= 30 ? "Fresh" : ageingDays <= 60 ? "Active" : ageingDays <= 90 ? "Moderate" : ageingDays <= 180 ? "Slow Moving" : ageingDays <= 270 ? "Ageing" : "Non-Moving";
-  const gp = row.tag_price > 0 ? ((row.tag_price - row.cost_price) / row.tag_price) * 100 : 0;
   const reasons: ScoredItemReason[] = [];
+  const clientPrefs = profile.clientPreferences;
 
-  // ── Raw 0-1 normalized scores (stored in breakdown for client re-weighting) ──
-  // Each dimension is 0-1. Multiply by weight % to get contribution.
-  // Weights sum to 100, so final score is 0-100.
+  // ── 1. SEGMENT (0-1): match product segment against preferences ──
+  const prefSegs = clientPrefs?.primarySegments || profile.preferredSegments || [];
+  const seg = row.product_segment || "";
+  let segNorm = 0.2;
+  if (seg && prefSegs.some(ps => seg.toLowerCase().includes(ps.toLowerCase()))) {
+    segNorm = 1.0;
+    reasons.push({ tag: "match", text: `${seg} matches preferred segment` });
+  } else if (seg) {
+    segNorm = 0.3;
+  }
 
-  // Visual: use raw cosine similarity (0-1), not relative-to-result-set normalization.
-  // This prevents inflated scores where weak matches get high visual scores just
-  // because they're the best in a poor result set.
-  const vNorm = Math.max(0, Math.min(1, similarity));
-
-  if (similarity >= 0.75) reasons.push({ tag: "match", text: `Strong style match (${Math.round(similarity * 100)}% similar to past sales)` });
-  else if (similarity >= 0.55) reasons.push({ tag: "match", text: `Moderate style match (${Math.round(similarity * 100)}% similar)` });
-
-  // Attribute match (category + price fit) — 0-1
-  let aNorm = 0.2; // base
+  // ── 2. CATEGORY (0-1): match against client or BDM preferred categories ──
+  const prefCats = clientPrefs?.preferredCategories || profile.preferredCategories;
   const cat = row.category?.toLowerCase() || "";
-  if (profile.preferredCategories.some(pc => cat.includes(pc.toLowerCase()))) {
-    aNorm = 0.6;
+  let catNorm = 0.3;
+  if (prefCats.some(pc => cat.includes(pc.toLowerCase()))) {
+    catNorm = 0.8;
     reasons.push({ tag: "category", text: `${row.category} matches preferred categories` });
   }
-  const price = row.tag_price;
-  const { min: pMin, max: pMax, sweet_spot } = profile.priceRange;
-  if (sweet_spot > 0 && price > 0) {
-    const deviation = Math.abs(price - sweet_spot) / sweet_spot;
-    if (deviation <= 0.2) { aNorm += 0.4; reasons.push({ tag: "price", text: `₹${price.toLocaleString()} near sweet spot ₹${sweet_spot.toLocaleString()}` }); }
-    else if (price >= pMin && price <= pMax) { aNorm += 0.2; }
+
+  // ── 3. VISUAL (0-1): composite of stones (50%) + motifs (50%) ──
+  // 3a. Stones sub-score
+  let stoneScore = 0.4;
+  const grossWtNum = parseFloat(row.gross_wt) || 1;
+  const polkiWt = (parseFloat(row.tot_polki_wt) || 0) / grossWtNum;
+  const diaWt = (parseFloat(row.tot_dia_wt) || 0) / grossWtNum;
+  const csWt = (parseFloat(row.tot_color_stone_wt) || 0) / grossWtNum;
+  if (clientPrefs && clientPrefs.stoneProfile) {
+    const sp = clientPrefs.stoneProfile;
+    const stockVec = [polkiWt, diaWt, csWt];
+    const clientVec = [sp.avgPolkiRatio, sp.avgDiamondRatio, sp.avgColorStoneRatio];
+    stoneScore = stoneCosineSim(stockVec, clientVec);
+    if (stoneScore >= 0.8) reasons.push({ tag: "pref", text: `Stone composition matches client preference` });
   }
-  aNorm = Math.min(aNorm, 1.0);
+  // 3b. Motif sub-score
+  let motifScore = 0.4;
+  const prefMotifs = profile.preferredMotifs || [];
+  if (row.motif && prefMotifs.length > 0) {
+    if (prefMotifs.some(m => row.motif.toLowerCase().includes(m.toLowerCase()))) {
+      motifScore = 1.0;
+      reasons.push({ tag: "pref", text: `Motif "${row.motif}" matches preference` });
+    } else if (row.motif_category && prefMotifs.some(m => row.motif_category.toLowerCase().includes(m.toLowerCase()))) {
+      motifScore = 0.6;
+    } else {
+      motifScore = 0.2;
+    }
+  }
+  const vNorm = 0.5 * stoneScore + 0.5 * motifScore;
 
-  // Sales velocity (margin as proxy) — 0-1
-  let pNorm = 0.3;
-  if (gp >= 50) { pNorm = 1.0; }
-  else if (gp >= 40) { pNorm = 0.7; }
-  else if (gp >= 30) { pNorm = 0.5; }
+  // ── 4. PRICE (0-1): proximity to client/BDM price range ──
+  let priNorm = 0.3;
+  const price = row.tag_price;
+  if (clientPrefs && clientPrefs.priceRange.median > 0 && price > 0) {
+    const median = clientPrefs.priceRange.median;
+    const deviation = Math.abs(price - median) / median;
+    if (deviation <= 0.15) { priNorm = 1.0; reasons.push({ tag: "band", text: `₹${price.toLocaleString()} near client median ₹${median.toLocaleString()}` }); }
+    else if (deviation <= 0.30) { priNorm = 0.7; }
+    else if (price >= clientPrefs.priceRange.min && price <= clientPrefs.priceRange.max) { priNorm = 0.4; }
+    else { priNorm = 0.1; }
+  } else {
+    const { min: pMin, max: pMax, sweet_spot } = profile.priceRange;
+    if (sweet_spot > 0 && price > 0) {
+      const deviation = Math.abs(price - sweet_spot) / sweet_spot;
+      if (deviation <= 0.15) { priNorm = 1.0; reasons.push({ tag: "band", text: `₹${price.toLocaleString()} near sweet spot ₹${sweet_spot.toLocaleString()}` }); }
+      else if (deviation <= 0.30) { priNorm = 0.7; }
+      else if (price >= pMin && price <= pMax) { priNorm = 0.4; }
+      else { priNorm = 0.1; }
+    }
+  }
 
-  // Ageing urgency — 0-1
-  let agNorm = 0.1;
-  if (ageTag === "Non-Moving") { agNorm = 1.0; reasons.push({ tag: "clearance", text: `Non-moving stock — ${ageingDays} days aged` }); }
-  else if (ageTag === "Ageing") { agNorm = 0.85; reasons.push({ tag: "clearance", text: `Ageing inventory — ${ageingDays} days aged` }); }
-  else if (ageTag === "Slow Moving") { agNorm = 0.65; reasons.push({ tag: "slow", text: `Slow moving — ${ageingDays} days` }); }
-  else if (ageTag === "Moderate") { agNorm = 0.4; }
-  else if (ageTag === "Active") { agNorm = 0.2; }
-
-  // Uniqueness — 0-1
-  let uNorm = 0.4;
-  if (similarity < 0.35) { uNorm = 0.7; reasons.push({ tag: "unique", text: "Novel style — discovery opportunity" }); }
-  else if (similarity > 0.85) { uNorm = 0.2; }
-
-  // Weighted total: norms × weights
+  // ── Weighted total ──
   let total = Math.round(
+    segNorm * weights.segment +
+    catNorm * weights.category +
     vNorm * weights.visual +
-    aNorm * weights.attribute +
-    pNorm * weights.velocity +
-    agNorm * weights.ageing
+    priNorm * weights.price
   );
 
-  // Location boost — small additive (max +3), kept outside weights
+  let bonus = 0;
   const locBoost = locationBoost(row.location);
   if (locBoost.boost > 0) {
-    total += Math.min(locBoost.boost, 3);
+    const lb = Math.min(locBoost.boost, 3); total += lb; bonus += lb;
     if (locBoost.reason) reasons.push({ tag: "pref", text: locBoost.reason });
   }
 
@@ -459,17 +598,22 @@ function scoreCandidate(
     imageUrl: row.image_url,
     baseMetal: row.base_metal,
     currentStatus: row.current_status,
+    productSegment: row.product_segment,
+    totPolkiWt: row.tot_polki_wt,
+    totColorStoneWt: row.tot_color_stone_wt,
+    motif: row.motif,
+    motifCategory: row.motif_category,
   };
 
   return {
     jewelCode: row.jewel_code,
     total,
     breakdown: {
+      segment: Math.round(segNorm * 100) / 100,
+      category: Math.round(catNorm * 100) / 100,
       visual: Math.round(vNorm * 100) / 100,
-      category: Math.round(aNorm * 100) / 100,
-      price: Math.round(pNorm * 100) / 100,
-      ageing: Math.round(agNorm * 100) / 100,
-      uniqueness: Math.round(uNorm * 100) / 100,
+      price: Math.round(priNorm * 100) / 100,
+      bonus,
     },
     reasons,
     inventoryData: candidate,
@@ -480,50 +624,86 @@ function scoreCandidate(
 
 function formulaScoreCandidate(
   candidate: InventoryCandidate,
-  profile: BdmStyleProfile
+  profile: BdmStyleProfile,
+  weights: ScoringWeights = DEFAULT_WEIGHTS
 ): AiScoredItem & { inventoryData: InventoryCandidate } {
-  const ageingDays = candidate.ageingDays;
-  const ageTag = ageingDays <= 30 ? "Fresh" : ageingDays <= 60 ? "Active" : ageingDays <= 90 ? "Moderate" : ageingDays <= 180 ? "Slow Moving" : ageingDays <= 270 ? "Ageing" : "Non-Moving";
-  const gp = candidate.tagPrice > 0 ? ((candidate.tagPrice - candidate.costPrice) / candidate.tagPrice) * 100 : 0;
   const reasons: ScoredItemReason[] = [];
+  const clientPrefs = profile.clientPreferences;
 
-  // No visual similarity available in formula mode
-  const vNorm = 0;
+  // ── 1. SEGMENT (0-1) ──
+  const prefSegs = clientPrefs?.primarySegments || profile.preferredSegments || [];
+  const seg = candidate.productSegment || "";
+  let segNorm = 0.2;
+  if (seg && prefSegs.some(ps => seg.toLowerCase().includes(ps.toLowerCase()))) {
+    segNorm = 1.0;
+  } else if (seg) {
+    segNorm = 0.3;
+  }
 
-  let aNorm = 0.2;
+  // ── 2. CATEGORY (0-1) ──
+  const prefCats = clientPrefs?.preferredCategories || profile.preferredCategories;
   const cat = candidate.category?.toLowerCase() || "";
-  if (profile.preferredCategories.some(pc => cat.includes(pc.toLowerCase()))) {
-    aNorm = 0.8;
+  let catNorm = 0.3;
+  if (prefCats.some(pc => cat.includes(pc.toLowerCase()))) {
+    catNorm = 0.8;
   }
 
-  let pNorm = 0.3;
-  const { sweet_spot } = profile.priceRange;
-  if (sweet_spot > 0 && candidate.tagPrice > 0) {
-    const deviation = Math.abs(candidate.tagPrice - sweet_spot) / sweet_spot;
-    if (deviation <= 0.2) pNorm = 0.9;
-    else if (deviation <= 0.5) pNorm = 0.6;
+  // ── 3. VISUAL (0-1): composite of stones (50%) + motifs (50%) ──
+  let stoneScore = 0.4;
+  if (clientPrefs && clientPrefs.stoneProfile) {
+    const gw = parseFloat(candidate.grossWt) || 1;
+    const polkiR = (parseFloat(candidate.totPolkiWt) || 0) / gw;
+    const diaR = (parseFloat(candidate.totDiaWt) || 0) / gw;
+    const csR = (parseFloat(candidate.totColorStoneWt) || 0) / gw;
+    const sp = clientPrefs.stoneProfile;
+    stoneScore = stoneCosineSim([polkiR, diaR, csR], [sp.avgPolkiRatio, sp.avgDiamondRatio, sp.avgColorStoneRatio]);
+  }
+  let motifScore = 0.4;
+  const prefMotifs = profile.preferredMotifs || [];
+  if (candidate.motif && prefMotifs.length > 0) {
+    if (prefMotifs.some(m => candidate.motif.toLowerCase().includes(m.toLowerCase()))) {
+      motifScore = 1.0;
+    } else if (candidate.motifCategory && prefMotifs.some(m => candidate.motifCategory.toLowerCase().includes(m.toLowerCase()))) {
+      motifScore = 0.6;
+    } else {
+      motifScore = 0.2;
+    }
+  }
+  const vNorm = 0.5 * stoneScore + 0.5 * motifScore;
+
+  // ── 4. PRICE (0-1) ──
+  let priNorm = 0.3;
+  if (clientPrefs && clientPrefs.priceRange.median > 0 && candidate.tagPrice > 0) {
+    const deviation = Math.abs(candidate.tagPrice - clientPrefs.priceRange.median) / clientPrefs.priceRange.median;
+    if (deviation <= 0.15) priNorm = 1.0;
+    else if (deviation <= 0.30) priNorm = 0.7;
+    else if (candidate.tagPrice >= clientPrefs.priceRange.min && candidate.tagPrice <= clientPrefs.priceRange.max) priNorm = 0.4;
+    else priNorm = 0.1;
+  } else {
+    const { sweet_spot } = profile.priceRange;
+    if (sweet_spot > 0 && candidate.tagPrice > 0) {
+      const deviation = Math.abs(candidate.tagPrice - sweet_spot) / sweet_spot;
+      if (deviation <= 0.2) priNorm = 0.9;
+      else if (deviation <= 0.5) priNorm = 0.6;
+    }
   }
 
-  let agNorm = 0.1;
-  if (ageTag === "Non-Moving") { agNorm = 1.0; reasons.push({ tag: "clearance", text: `Non-moving stock — ${ageingDays} days` }); }
-  else if (ageTag === "Ageing") { agNorm = 0.85; reasons.push({ tag: "clearance", text: `Ageing inventory — ${ageingDays} days` }); }
-  else if (ageTag === "Slow Moving") { agNorm = 0.65; reasons.push({ tag: "slow", text: `Slow moving — ${ageingDays} days` }); }
-  else if (ageTag === "Moderate") { agNorm = 0.4; }
-  else if (ageTag === "Active") { agNorm = 0.2; }
-
-  // Use default weights since no BDM weights in formula path
+  // ── Weighted total ──
   let total = Math.round(
-    vNorm * DEFAULT_WEIGHTS.visual +
-    aNorm * DEFAULT_WEIGHTS.attribute +
-    pNorm * DEFAULT_WEIGHTS.velocity +
-    agNorm * DEFAULT_WEIGHTS.ageing
+    segNorm * weights.segment +
+    catNorm * weights.category +
+    vNorm * weights.visual +
+    priNorm * weights.price
   );
-  if (gp >= 50) total += 3;
-  else if (gp >= 40) total += 1;
+  let bonus = 0;
+
+  const gp = candidate.tagPrice > 0 ? ((candidate.tagPrice - candidate.costPrice) / candidate.tagPrice) * 100 : 0;
+  if (gp >= 50) { total += 3; bonus += 3; }
+  else if (gp >= 40) { total += 1; bonus += 1; }
 
   const locBoost = locationBoost(candidate.location);
   if (locBoost.boost > 0) {
-    total += Math.min(locBoost.boost, 3);
+    const lb = Math.min(locBoost.boost, 3); total += lb; bonus += lb;
     if (locBoost.reason) reasons.push({ tag: "pref", text: locBoost.reason });
   }
 
@@ -534,11 +714,11 @@ function formulaScoreCandidate(
     jewelCode: candidate.jewelCode,
     total,
     breakdown: {
-      visual: 0,
-      category: Math.round(aNorm * 100) / 100,
-      price: Math.round(pNorm * 100) / 100,
-      ageing: Math.round(agNorm * 100) / 100,
-      uniqueness: 0.4,
+      segment: Math.round(segNorm * 100) / 100,
+      category: Math.round(catNorm * 100) / 100,
+      visual: Math.round(vNorm * 100) / 100,
+      price: Math.round(priNorm * 100) / 100,
+      bonus,
     },
     reasons,
     inventoryData: candidate,
@@ -608,7 +788,8 @@ async function injectMissingSetPairs(
   const result = await db.execute(sql.raw(`
     SELECT jewel_code, style_no, category, tag_price, cost_price,
            ageing_days, gross_wt, pure_wt, tot_dia_wt, stock_type,
-           location, image_url, base_metal, current_status
+           location, image_url, base_metal, current_status,
+           product_segment, tot_polki_wt, tot_color_stone_wt
     FROM live_stock_items
     WHERE (${likeConditions.join(" OR ")})
       AND current_status = 'On Hand'
@@ -639,6 +820,11 @@ async function injectMissingSetPairs(
       imageUrl: String(row.image_url || ""),
       baseMetal: String(row.base_metal || ""),
       currentStatus: String(row.current_status || ""),
+      productSegment: String(row.product_segment || ""),
+      totPolkiWt: String(row.tot_polki_wt || "0"),
+      totColorStoneWt: String(row.tot_color_stone_wt || "0"),
+      motif: "",
+      motifCategory: "",
     };
 
     // Find the existing pair's score and match it
@@ -654,7 +840,7 @@ async function injectMissingSetPairs(
     newItems.push({
       jewelCode: jc,
       total: pairScore, // same score as its pair — keep together in sorting
-      breakdown: { visual: 0, category: 0.75, price: 0.5, ageing: 0.25, uniqueness: 0.5 },
+      breakdown: { segment: 0.5, category: 0.75, visual: 0.5, price: 0.5, bonus: 0 },
       reasons,
       inventoryData: candidate,
     });
@@ -668,6 +854,95 @@ async function injectMissingSetPairs(
   return items.concat(newItems);
 }
 
+// ── Client preference extraction (deterministic, no AI) ─────────────────
+
+function median(nums: number[]): number {
+  if (nums.length === 0) return 0;
+  const sorted = [...nums].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+export function extractClientPreferences(
+  sales: B2bSalesHistory[],
+  clientName: string
+): ClientPreferences | null {
+  const clientSales = sales.filter(s => (s.clientName || "").trim().toLowerCase() === clientName.trim().toLowerCase());
+  if (clientSales.length === 0) return null;
+
+  // Segment distribution
+  const segCounts = new Map<string, number>();
+  for (const s of clientSales) {
+    const seg = (s.productSegment || "").trim();
+    if (seg) segCounts.set(seg, (segCounts.get(seg) || 0) + 1);
+  }
+  const sortedSegs = Array.from(segCounts.entries()).sort((a, b) => b[1] - a[1]);
+  const segDist: Record<string, number> = {};
+  for (const [seg, cnt] of sortedSegs) segDist[seg] = cnt;
+
+  // Category distribution
+  const catCounts = new Map<string, number>();
+  for (const s of clientSales) {
+    const cat = (s.categoryGroup || s.category || "").trim();
+    if (cat) catCounts.set(cat, (catCounts.get(cat) || 0) + 1);
+  }
+  const sortedCats = Array.from(catCounts.entries()).sort((a, b) => b[1] - a[1]);
+
+  // Price range
+  const prices = clientSales.map(s => s.finalPrice || s.tagPrice || 0).filter(p => p > 0);
+  const priceMin = prices.length > 0 ? Math.min(...prices) : 0;
+  const priceMax = prices.length > 0 ? Math.max(...prices) : 0;
+  const priceMedian = median(prices);
+
+  // Weight range
+  const weights = clientSales.map(s => parseFloat(s.grossWt || "0")).filter(w => w > 0);
+  const weightMin = weights.length > 0 ? Math.min(...weights) : 0;
+  const weightMax = weights.length > 0 ? Math.max(...weights) : 0;
+  const weightMedian = median(weights);
+
+  // Stone profile
+  let polkiSum = 0, diaSum = 0, csSum = 0, stoneCount = 0;
+  const colourCounts = new Map<string, number>();
+  const matRatioCounts = new Map<string, number>();
+  for (const s of clientSales) {
+    const grossWt = parseFloat(s.grossWt || "0") || 1;
+    const diaWt = parseFloat(s.totDiaWt || "0");
+    if (diaWt > 0 || grossWt > 1) {
+      diaSum += diaWt / grossWt;
+      stoneCount++;
+    }
+    // Stone colour
+    const colour = (s.stoneColour || "").trim();
+    if (colour) colourCounts.set(colour, (colourCounts.get(colour) || 0) + 1);
+    // Material ratio
+    const mr = (s.materialRatio || "").trim();
+    if (mr) matRatioCounts.set(mr, (matRatioCounts.get(mr) || 0) + 1);
+  }
+  const avgDiaRatio = stoneCount > 0 ? diaSum / stoneCount : 0;
+  const avgPolkiRatio = polkiSum; // polki weight not in sales schema, default 0
+  const avgCsRatio = csSum; // color stone weight not in sales schema, default 0
+
+  const topColours = Array.from(colourCounts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([c]) => c);
+  const topMatRatio = Array.from(matRatioCounts.entries()).sort((a, b) => b[1] - a[1]);
+
+  return {
+    clientName,
+    totalTransactions: clientSales.length,
+    primarySegments: sortedSegs.slice(0, 3).map(([s]) => s),
+    segmentDistribution: segDist,
+    preferredCategories: sortedCats.slice(0, 5).map(([c]) => c),
+    priceRange: { min: priceMin, max: priceMax, median: priceMedian },
+    weightRange: { min: weightMin, max: weightMax, median: weightMedian },
+    stoneProfile: {
+      avgPolkiRatio,
+      avgDiamondRatio: avgDiaRatio,
+      avgColorStoneRatio: avgCsRatio,
+      preferredColours: topColours,
+      materialRatioPreference: topMatRatio.length > 0 ? topMatRatio[0][0] : "",
+    },
+  };
+}
+
 // ── Main scoring orchestrator ──────────────────────────────────────────────
 
 export async function scoreAssortment(
@@ -679,12 +954,16 @@ export async function scoreAssortment(
   kitSize: number = 100,
   weightMin?: number,
   weightMax?: number,
-  weights?: ScoringWeights
+  weights?: ScoringWeights,
+  // Date-scoped runs (month/year filter) pass forceMetadata: the BDM's embedded
+  // sales vectors can't be date-filtered, so we build a metadata profile from the
+  // date-scoped sales and score via formula. cacheSuffix keeps the period distinct.
+  opts?: { forceMetadata?: boolean; cacheSuffix?: string }
 ): Promise<AiScoreResult> {
   const totalStart = Date.now();
 
   // ── Check profile cache ──
-  const cacheKey = getCacheKey(bdmName, stateName, clientName);
+  const cacheKey = getCacheKey(bdmName, stateName, clientName) + (opts?.cacheSuffix || "");
   const cached = profileCache.get(cacheKey);
   let profile: BdmStyleProfile;
   let profileVector: number[] | null = null;
@@ -701,6 +980,13 @@ export async function scoreAssortment(
 
     if (sales.length === 0) {
       profile = buildFallbackProfile(bdmName);
+    } else if (opts?.forceMetadata) {
+      // Date-scoped path: build profile from the period-filtered sales only.
+      // Use the instant metadata profile (no Gemini call) — embeddings can't be
+      // date-filtered, so scoring goes through the formula path regardless, and
+      // metadata (categories/segments/price) is all the formula scorer needs.
+      profile = buildMetadataProfile(sales, bdmName);
+      console.log(`[assortment-scorer] Date-scoped metadata profile built from ${sales.length} period sales`);
     } else {
       // Fetch embedded sales vectors
       const { embeddings } = await fetchBdmSalesEmbeddings(bdmName, stateName, clientName);
@@ -726,6 +1012,20 @@ export async function scoreAssortment(
     console.log(`[assortment-scorer] Profile built in ${profileMs}ms`);
   }
 
+  // ── Extract client preferences when client is selected ──
+  let segmentFilter: string[] | undefined;
+  if (clientName && sales.length > 0) {
+    const clientPrefs = extractClientPreferences(sales, clientName);
+    if (clientPrefs) {
+      profile.clientPreferences = clientPrefs;
+      if (clientPrefs.primarySegments.length > 0) {
+        segmentFilter = clientPrefs.primarySegments;
+        console.log(`[assortment-scorer] Client "${clientName}" segment filter: ${segmentFilter.join(", ")}`);
+      }
+      console.log(`[assortment-scorer] Client preferences: ${clientPrefs.totalTransactions} txns, price ${clientPrefs.priceRange.min}-${clientPrefs.priceRange.max}, weight ${clientPrefs.weightRange.min.toFixed(1)}-${clientPrefs.weightRange.max.toFixed(1)}g`);
+    }
+  }
+
   // ── Score items ──
   const scoringStart = Date.now();
   let method: "vector" | "formula" = "formula";
@@ -737,25 +1037,51 @@ export async function scoreAssortment(
     const maxResults = Math.max(kitSize * 3, 300);
     console.log(`[assortment-scorer] Running vector similarity search (top ${maxResults})...`);
 
-    const vectorResults = await searchSimilarStock(profileVector, maxResults, weightMin, weightMax);
-    console.log(`[assortment-scorer] Vector search returned ${vectorResults.length} results`);
+    let vectorResults = await searchSimilarStock(profileVector, maxResults, weightMin, weightMax, segmentFilter);
+    console.log(`[assortment-scorer] Vector search returned ${vectorResults.length} results (segment-filtered: ${!!segmentFilter})`);
 
-    // Compute similarity range for normalization — avoids clustered scores
-    const sims = vectorResults.map(r => r.similarity);
-    const simRange: SimRange = {
-      min: sims.length > 0 ? Math.min(...sims) : 0,
-      max: sims.length > 0 ? Math.max(...sims) : 1,
-    };
-    console.log(`[assortment-scorer] Similarity range: ${simRange.min.toFixed(4)} - ${simRange.max.toFixed(4)}`);
+    // If segment filter returned too few results, retry without filter and merge
+    if (segmentFilter && vectorResults.length < kitSize) {
+      console.log(`[assortment-scorer] Segment-filtered results (${vectorResults.length}) < kitSize (${kitSize}), backfilling without filter...`);
+      const existingCodes = new Set(vectorResults.map(r => r.jewel_code));
+      const unfilteredResults = await searchSimilarStock(profileVector, maxResults, weightMin, weightMax);
+      const backfill = unfilteredResults.filter(r => !existingCodes.has(r.jewel_code));
+      vectorResults = vectorResults.concat(backfill).slice(0, maxResults);
+      console.log(`[assortment-scorer] After backfill: ${vectorResults.length} total results`);
+    }
 
-    const w = weights || DEFAULT_WEIGHTS;
-    finalItems = vectorResults.map(row => scoreCandidate(row, profile, simRange, w));
+    if (vectorResults.length > 0) {
+      const sims = vectorResults.map(r => r.similarity);
+      const simRange: SimRange = {
+        min: Math.min(...sims),
+        max: Math.max(...sims),
+      };
+      console.log(`[assortment-scorer] Similarity range: ${simRange.min.toFixed(4)} - ${simRange.max.toFixed(4)}`);
+
+      const w = weights || DEFAULT_WEIGHTS;
+      finalItems = vectorResults.map(row => scoreCandidate(row, profile, simRange, w));
+    } else {
+      console.warn(`[assortment-scorer] Vector search returned 0 results — falling back to formula scoring`);
+      method = "formula";
+      let effectiveCandidates = candidates;
+      if (effectiveCandidates.length === 0) {
+        console.log(`[assortment-scorer] No candidates provided — fetching raw stock from DB`);
+        effectiveCandidates = await fetchRawStockCandidates(Math.max(kitSize * 3, 300), weightMin, weightMax, segmentFilter);
+        console.log(`[assortment-scorer] Fetched ${effectiveCandidates.length} raw stock candidates`);
+      }
+      finalItems = effectiveCandidates.map(c => formulaScoreCandidate(c, profile, weights || DEFAULT_WEIGHTS));
+    }
   } else {
-    // Formula fallback: score candidates passed by caller
-    console.log(`[assortment-scorer] No profile vector — using formula scoring on ${candidates.length} candidates`);
-    finalItems = candidates.map(c => formulaScoreCandidate(c, profile));
+    // Formula fallback: no profile vector available
+    let effectiveCandidates = candidates;
+    if (effectiveCandidates.length === 0) {
+      console.log(`[assortment-scorer] No candidates provided — fetching raw stock from DB`);
+      effectiveCandidates = await fetchRawStockCandidates(Math.max(kitSize * 3, 300), weightMin, weightMax, segmentFilter);
+      console.log(`[assortment-scorer] Fetched ${effectiveCandidates.length} raw stock candidates`);
+    }
+    console.log(`[assortment-scorer] No profile vector — using formula scoring on ${effectiveCandidates.length} candidates`);
+    finalItems = effectiveCandidates.map(c => formulaScoreCandidate(c, profile, weights || DEFAULT_WEIGHTS));
   }
-
   // ── Inject missing set pairs ──
   // If we have a necklace but not its earring (or vice versa), fetch the pair from DB
   finalItems = await injectMissingSetPairs(finalItems, profile);
@@ -1039,7 +1365,17 @@ function buildMetadataProfile(sales: B2bSalesHistory[], bdmName: string): BdmSty
 
   const sweetSpot = priceCount > 0 ? Math.round(priceSum / priceCount) : 250000;
 
+  const segments = new Map<string, number>();
+  for (const s of sales) {
+    if (s.productSegment) segments.set(s.productSegment, (segments.get(s.productSegment) || 0) + 1);
+  }
+  const topSegments = Array.from(segments.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([seg]) => seg);
+
   return {
+    preferredSegments: topSegments,
     preferredCategories: topCategories,
     priceRange: {
       min: minPrice === Infinity ? 50000 : minPrice,

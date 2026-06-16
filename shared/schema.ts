@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, jsonb, integer, customType } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, jsonb, integer, customType, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -240,6 +240,7 @@ export const liveStockItems = pgTable("live_stock_items", {
   makeType: varchar("make_type", { length: 50 }),
   subCategory: varchar("sub_category", { length: 50 }),
   stockType: varchar("stock_type", { length: 30 }),
+  productSegment: varchar("product_segment", { length: 100 }),
   category: varchar("category", { length: 80 }),
   baseMetal: varchar("base_metal", { length: 20 }),
   location: varchar("location", { length: 100 }),
@@ -430,6 +431,46 @@ export const insertB2bSalesHistorySchema = createInsertSchema(b2bSalesHistory).o
 
 export type InsertB2bSalesHistory = z.infer<typeof insertB2bSalesHistorySchema>;
 export type B2bSalesHistory = typeof b2bSalesHistory.$inferSelect;
+
+// ── Live Sales (synced from ERP GetSalesData API) ──────────────────────────
+// Persists ERP sales transactions so the Sales page serves from DB instead of
+// re-fetching ~5,000+ rows on every load. Upserted by jewelTransId; never deleted
+// (sales are historical). Mirrors live_stock_items / stock-sync.ts pattern.
+
+// NOTE: jewelTransId is the *bill* ID, not a line-item ID — one bill contains
+// multiple jewels, each with a distinct jewelCode. The unique key is therefore
+// the composite (jewelTransId, jewelCode), one row per sold line item.
+export const liveSales = pgTable("live_sales", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  jewelTransId: integer("jewel_trans_id").notNull(),
+  jewelTransDate: text("jewel_trans_date"),          // ISO date from API
+  clientName: text("client_name"),
+  stateName: text("state_name"),
+  jewelCode: text("jewel_code").notNull().default(""), // physical item barcode; part of unique key
+  styleCode: text("style_code"),
+  pureWeight: text("pure_weight"),
+  category: text("category"),                         // "Categoty" in API (typo)
+  transactionAmt: integer("transaction_amt"),
+  tagPrice: integer("tag_price"),
+  stockType: text("stock_type"),
+  salesPersonName: text("sales_person_name"),
+  billingType: text("billing_type"),
+  transactionMonth: text("transaction_month"),        // "January", "February"...
+  transactionYear: integer("transaction_year"),
+  imageUrl: text("image_url"),
+  saleType: text("sale_type"),
+  syncedAt: timestamp("synced_at").defaultNow().notNull(),
+}, (table) => ({
+  transItemUniq: unique("live_sales_trans_item_uniq").on(table.jewelTransId, table.jewelCode),
+}));
+
+export const insertLiveSalesSchema = createInsertSchema(liveSales).omit({
+  id: true,
+  syncedAt: true,
+});
+
+export type InsertLiveSales = z.infer<typeof insertLiveSalesSchema>;
+export type LiveSales = typeof liveSales.$inferSelect;
 
 // ── Exhibition SKU Interests (imported from EXHIBITION-SKU-DIGL.xlsx) ──────
 
