@@ -2719,16 +2719,49 @@ export async function registerRoutes(
   });
 
   // ── Image proxy (HTTPS → HTTP for ERP images) ──────────────────────────
+  // Image proxy for the ERP's plain-HTTP images (avoids mixed-content on the
+  // HTTPS app). Hardened against SSRF (strict host allowlist + no redirect
+  // following) and XSS (only real image MIME types are streamed back; svg/html
+  // are rejected and nosniff/CSP headers prevent same-origin script execution).
+  const ALLOWED_IMG_HOSTS = new Set<string>(["183.83.176.221"]);
+  const ALLOWED_IMG_TYPES = new Set<string>([
+    "image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif",
+  ]);
+
   app.get("/api/img-proxy", async (req, res) => {
     const url = req.query.url as string;
-    if (!url || !url.startsWith("http://")) {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
       return res.status(400).json({ message: "Invalid url parameter" });
     }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return res.status(400).json({ message: "Invalid url protocol" });
+    }
+    if (!ALLOWED_IMG_HOSTS.has(parsed.hostname.toLowerCase())) {
+      return res.status(400).json({ message: "Host not allowed" });
+    }
     try {
-      const upstream = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      // redirect: "manual" so a 3xx can't bounce us past the host allowlist.
+      const upstream = await fetch(parsed.toString(), {
+        redirect: "manual",
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (upstream.status >= 300 && upstream.status < 400) {
+        return res.status(502).end();
+      }
       if (!upstream.ok) return res.status(upstream.status).end();
-      const contentType = upstream.headers.get("content-type") || "image/jpeg";
+
+      const contentType = (upstream.headers.get("content-type") || "")
+        .split(";")[0].trim().toLowerCase();
+      if (!ALLOWED_IMG_TYPES.has(contentType)) {
+        return res.status(415).end();
+      }
+
       res.setHeader("Content-Type", contentType);
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Security-Policy", "default-src 'none'");
       res.setHeader("Cache-Control", "public, max-age=86400");
       const buffer = Buffer.from(await upstream.arrayBuffer());
       res.send(buffer);
