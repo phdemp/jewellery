@@ -49,14 +49,28 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
+const isProd = process.env.NODE_ENV === "production";
+const sessionSecret = process.env.SESSION_SECRET;
+// Never fall back to a hardcoded secret in production — a known secret lets
+// anyone forge a valid session cookie (full auth bypass).
+if (isProd && !sessionSecret) {
+  throw new Error("SESSION_SECRET environment variable is required in production");
+}
+// App runs behind a TLS-terminating reverse proxy (Apache) in production;
+// trust it so `secure` cookies are issued for the proxied HTTPS requests.
+if (isProd) {
+  app.set("trust proxy", 1);
+}
+
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || "dev-secret",
+    secret: sessionSecret || "dev-only-insecure-secret",
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
       sameSite: "lax",
+      secure: isProd, // HTTPS-only cookie in production
       maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
     },
   }),

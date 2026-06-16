@@ -15,6 +15,23 @@ import { sql } from "drizzle-orm";
 import { GoogleGenAI } from "@google/genai";
 import type { B2bSalesHistory } from "@shared/schema";
 
+// Product segments are a fixed, server-derived enum (see deriveSegmentFromStyle
+// in storage.ts). Validate against this allowlist before building the IN clause
+// so no untrusted value can ever reach the raw SQL string.
+const KNOWN_SEGMENTS = new Set<string>([
+  "Bridal", "Bridal Lite", "Traditional", "Modern", "RTW",
+  "Ear Essentials", "Handwear", "Add-ons", "Exclusive - Grandeur",
+]);
+
+function buildSegmentInClause(segmentFilter?: string[]): string {
+  if (!segmentFilter || segmentFilter.length === 0) return "";
+  const safe = segmentFilter.filter((s) => KNOWN_SEGMENTS.has(s));
+  if (safe.length === 0) return "";
+  // Values are constrained to the allowlist above, so they are safe literals.
+  const list = safe.map((s) => `'${s}'`).join(",");
+  return ` AND ls.product_segment IN (${list})`;
+}
+
 // ── Gemini client (lazy init) ─────────────────────────────────────────────
 
 let _ai: GoogleGenAI | null = null;
@@ -253,10 +270,7 @@ async function searchSimilarStock(
   if (weightMax) {
     whereClause += ` AND CAST(NULLIF(TRIM(ls.gross_wt), '') AS NUMERIC) <= ${Number(weightMax)}`;
   }
-  if (segmentFilter && segmentFilter.length > 0) {
-    const escaped = segmentFilter.map(s => `'${s.replace(/'/g, "''")}'`).join(",");
-    whereClause += ` AND ls.product_segment IN (${escaped})`;
-  }
+  whereClause += buildSegmentInClause(segmentFilter);
 
   const result = await db.execute(sql.raw(`
     SELECT
@@ -316,10 +330,7 @@ async function fetchRawStockCandidates(
   if (weightMax) {
     whereClause += ` AND CAST(NULLIF(TRIM(ls.gross_wt), '') AS NUMERIC) <= ${Number(weightMax)}`;
   }
-  if (segmentFilter && segmentFilter.length > 0) {
-    const escaped = segmentFilter.map(s => `'${s.replace(/'/g, "''")}'`).join(",");
-    whereClause += ` AND ls.product_segment IN (${escaped})`;
-  }
+  whereClause += buildSegmentInClause(segmentFilter);
 
   const result = await db.execute(sql.raw(`
     SELECT ls.jewel_code, ls.style_no, ls.category, ls.tag_price, ls.cost_price,
