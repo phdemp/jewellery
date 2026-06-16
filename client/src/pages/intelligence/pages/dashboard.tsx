@@ -5,12 +5,13 @@ import {
 } from "recharts";
 import { AlertTriangle, ArrowRight, Package, TrendingDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { DATA } from "../lib/intelligence-data";
 import { fmt, fmtN } from "../lib/intelligence-utils";
-import { PIE_COLORS, AGEING_COLORS, SHORT_MONTHS } from "../lib/intelligence-constants";
+import { PIE_COLORS, AGEING_COLORS } from "../lib/intelligence-constants";
 import { useIntelligence } from "../intelligence-context";
 import { useQuery } from "@tanstack/react-query";
-import { fetchStockSummary } from "@/lib/api";
+import { fetchStockSummary, fetchSalesData } from "@/lib/api";
+
+const MONTH_ABBR = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 // ---------------------------------------------------------------------------
 // Color tokens
@@ -259,115 +260,154 @@ function AlertCard({ title, count, description, color, icon, actionLabel, onActi
 // ---------------------------------------------------------------------------
 export default function DashboardPage() {
   const { setActivePage, setDashFilter } = useIntelligence();
-  const S = DATA.summary;
 
   // Live stock summary from API
   const { data: liveSummary, isLoading: summaryLoading } = useQuery({
     queryKey: ["stock-summary"],
-    queryFn: fetchStockSummary,
+    queryFn: () => fetchStockSummary(),
   });
 
-  // Use live data for stock stats, fallback to static DATA.summary
-  const onHandCount = liveSummary?.onHandCount ?? S.onHand;
-  const totalStockCount = liveSummary?.totalCount ?? S.totalStock;
-  const deadStockCount = liveSummary?.deadStockCount ?? S.deadStockCount;
-  const deadStockCostVal = liveSummary?.deadStockCostValue ?? S.deadStockCostVal;
-  const onHandTagVal = liveSummary?.onHandTagValue ?? S.onHandTagVal;
-  const onHandCostVal = liveSummary?.onHandCostValue ?? S.onHandCostVal;
-  const memoCount = liveSummary?.memoCount ?? S.memo;
+  // Live sales/returns data from API
+  const { data: salesData, isLoading: salesLoading } = useQuery({
+    queryKey: ["sales-data"],
+    queryFn: fetchSalesData,
+    staleTime: 15 * 60 * 1000,
+  });
 
-  // Compute net sales strip values from summary (static -- sales data not from stock API)
-  const grossSales = S.totalRevenue;
-  const totalReturns = S.totalReturns;
-  const returnRate = S.returnRate;
-  const netSales = S.netRevenue;
+  // Live stock stats
+  const onHandCount = liveSummary?.onHandCount ?? 0;
+  const totalStockCount = liveSummary?.totalCount ?? 0;
+  const deadStockCount = liveSummary?.deadStockCount ?? 0;
+  const deadStockCostVal = liveSummary?.deadStockCostValue ?? 0;
+  const onHandTagVal = liveSummary?.onHandTagValue ?? 0;
+  const onHandCostVal = liveSummary?.onHandCostValue ?? 0;
+  const memoCount = liveSummary?.memoCount ?? 0;
 
-  // Ageing pie data (static)
-  const ageingPieData = useMemo(() =>
-    DATA.ageing.map((a) => ({
-      name: a["Ageing Tag"],
-      value: a.count,
-    })),
-    []
+  // Single pass over live sales rows → gross / returns / net + breakdowns.
+  // Returns are rows with saleType "Sales Return" (negative transaction_amt).
+  const salesAgg = useMemo(() => {
+    const rows = salesData?.sales ?? [];
+    let gross = 0;
+    let returns = 0;
+    let salesTxns = 0;
+    const catGross = new Map<string, number>();
+    const catRet = new Map<string, number>();
+    const chanRet = new Map<string, number>();
+    const monthGross = new Map<string, number>();
+    for (const r of rows) {
+      const isReturn = r.saleType === "Sales Return" || r.transPrice < 0;
+      if (isReturn) {
+        const v = Math.abs(r.transPrice);
+        returns += v;
+        catRet.set(r.category, (catRet.get(r.category) || 0) + v);
+        chanRet.set(r.salesPerson, (chanRet.get(r.salesPerson) || 0) + v);
+      } else {
+        gross += r.transPrice;
+        salesTxns++;
+        catGross.set(r.category, (catGross.get(r.category) || 0) + r.transPrice);
+        const month = r.transDate ? r.transDate.slice(0, 7) : "";
+        if (month) monthGross.set(month, (monthGross.get(month) || 0) + r.transPrice);
+      }
+    }
+    return {
+      gross,
+      returns,
+      salesTxns,
+      net: gross - returns,
+      returnRate: gross > 0 ? (returns / gross) * 100 : 0,
+      catGross,
+      catRet,
+      chanRet,
+      monthGross,
+    };
+  }, [salesData]);
+
+  // Net sales strip values (live)
+  const grossSales = salesAgg.gross;
+  const totalReturns = salesAgg.returns;
+  const returnRate = salesAgg.returnRate;
+  const netSales = salesAgg.net;
+
+  // Ageing pie data (live, On Hand)
+  const ageingPieData = useMemo(
+    () =>
+      (liveSummary?.ageingBreakdown ?? []).map((a) => ({
+        name: a.label,
+        value: a.count,
+      })),
+    [liveSummary]
   );
   const ageingColors = useMemo(
-    () => DATA.ageing.map((a) => AGEING_COLORS[a["Ageing Tag"]] || WARM_GREY),
-    []
+    () => (liveSummary?.ageingBreakdown ?? []).map((a) => AGEING_COLORS[a.label] || WARM_GREY),
+    [liveSummary]
   );
 
-  // Monthly bar data (static)
-  const monthlyBarData = useMemo(() =>
-    DATA.monthly.map((m, i) => ({
-      month: SHORT_MONTHS[i] || m.month_str,
-      revenue: m.revenue,
-    })),
-    []
-  );
+  // Monthly gross revenue bar (live, fiscal order via YYYY-MM sort)
+  const monthlyBarData = useMemo(() => {
+    return Array.from(salesAgg.monthGross.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([monthStr, revenue]) => {
+        const mo = parseInt(monthStr.split("-")[1] || "0", 10);
+        return { month: MONTH_ABBR[mo] || monthStr, revenue };
+      });
+  }, [salesAgg]);
 
-  // Category pie -- use live categoryBreakdown if available, else static
+  // Category pie -- live stock tag value by category
   const catPieData = useMemo(() => {
-    if (liveSummary?.categoryBreakdown?.length) {
-      return liveSummary.categoryBreakdown
-        .filter((c) => c.category)
-        .sort((a, b) => b.tagValue - a.tagValue)
-        .slice(0, 12)
-        .map((c) => ({ name: c.category, value: c.tagValue }));
-    }
-    return DATA.catRevenue.map((c) => ({
-      name: c.CategoryGroup,
-      value: c.revenue,
-    }));
+    return (liveSummary?.categoryBreakdown ?? [])
+      .filter((c) => c.category)
+      .sort((a, b) => b.tagValue - a.tagValue)
+      .slice(0, 12)
+      .map((c) => ({ name: c.category, value: c.tagValue }));
   }, [liveSummary]);
 
-  // Location stock pie -- use live locationBreakdown if available, else static
+  // Location stock pie -- live stock count by location
   const locPieData = useMemo(() => {
-    if (liveSummary?.locationBreakdown?.length) {
-      return liveSummary.locationBreakdown
-        .filter((l) => l.location)
-        .sort((a, b) => b.count - a.count)
-        .map((l) => ({ name: l.location, value: l.count }));
-    }
-    return DATA.locationStock.map((l) => ({
-      name: l["Location Name"],
-      value: l.count,
-    }));
+    return (liveSummary?.locationBreakdown ?? [])
+      .filter((l) => l.location)
+      .sort((a, b) => b.count - a.count)
+      .map((l) => ({ name: l.location, value: l.count }));
   }, [liveSummary]);
 
-  // Returns by category (derived from catRevenue proportions against totalReturns -- static)
+  // Returns by category (live)
   const returnsByCatData = useMemo(() => {
-    const totalCatRev = DATA.catRevenue.reduce((s, c) => s + c.revenue, 0);
-    return DATA.catRevenue.slice(0, 8).map((c) => ({
-      name: c.CategoryGroup,
-      value: Math.round((c.revenue / totalCatRev) * S.totalReturns),
-    }));
-  }, [S.totalReturns]);
+    return Array.from(salesAgg.catRet.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([name, value]) => ({ name, value }));
+  }, [salesAgg]);
 
-  // Returns by BDM (static)
+  // Returns by channel (live)
   const returnsByBdmData = useMemo(() => {
-    const totalChRev = DATA.salesChannel.reduce((s, c) => s + c.revenue, 0);
-    return DATA.salesChannel.slice(0, 6).map((c) => ({
-      name: c.SalesPersonName,
-      value: Math.round((c.revenue / totalChRev) * S.totalReturns),
-    }));
-  }, [S.totalReturns]);
+    return Array.from(salesAgg.chanRet.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([name, value]) => ({ name, value }));
+  }, [salesAgg]);
 
-  // Net sales by category table (static)
+  // Net sales by category table (live: gross − returns per category)
   const netSalesTable = useMemo(() => {
-    const totalCatRev = DATA.catRevenue.reduce((s, c) => s + c.revenue, 0);
-    return DATA.catRevenue.map((c) => {
-      const proportion = totalCatRev > 0 ? c.revenue / totalCatRev : 0;
-      const catReturn = Math.round(proportion * S.totalReturns);
-      const catNet = c.revenue - catReturn;
-      const catReturnPct = c.revenue > 0 ? (catReturn / c.revenue) * 100 : 0;
-      return {
-        category: c.CategoryGroup,
-        gross: c.revenue,
-        returns: catReturn,
-        returnPct: catReturnPct,
-        net: catNet,
-      };
-    });
-  }, [S.totalReturns]);
+    const cats = new Set<string>([
+      ...Array.from(salesAgg.catGross.keys()),
+      ...Array.from(salesAgg.catRet.keys()),
+    ]);
+    return Array.from(cats)
+      .map((category) => {
+        const gross = salesAgg.catGross.get(category) || 0;
+        const returns = salesAgg.catRet.get(category) || 0;
+        return {
+          category,
+          gross,
+          returns,
+          returnPct: gross > 0 ? (returns / gross) * 100 : 0,
+          net: gross - returns,
+        };
+      })
+      .sort((a, b) => b.gross - a.gross);
+  }, [salesAgg]);
+
+  const slowMovingCount =
+    liveSummary?.ageingBreakdown?.find((a) => a.label === "Slow Moving")?.count ?? 0;
 
   const handleCatClick = (name: string) => {
     setDashFilter({ type: "category", value: name });
@@ -400,8 +440,8 @@ export default function DashboardPage() {
         />
         <StatCard
           label="FY Revenue"
-          value={fmt(S.totalRevenue)}
-          meta={`${fmtN(S.totalTxns)} transactions`}
+          value={salesLoading ? "..." : fmt(grossSales)}
+          meta={`${fmtN(salesAgg.salesTxns)} transactions`}
         />
         <StatCard
           label="On Hand Tag Value"
@@ -621,7 +661,7 @@ export default function DashboardPage() {
           />
           <AlertCard
             title="Slow Moving"
-            count={DATA.ageing.find((a) => (a["Ageing Tag"] as string) === "Slow Moving")?.count ?? 0}
+            count={slowMovingCount}
             description="Items aged 91-180 days"
             color={AMBER}
             icon={<TrendingDown className="w-5 h-5" />}

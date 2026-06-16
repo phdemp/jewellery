@@ -15,6 +15,7 @@ import {
   generateExhibitionScore,
   fetchLocations,
   generateLocationScore,
+  fetchAssortmentSalesPeriods,
 } from "@/lib/api";
 import type { AiScoredItem, AiScoreProfile, AiScoreBreakdown, ScoringWeights } from "@/lib/api";
 
@@ -100,6 +101,81 @@ interface DecisionState {
   [jc: string]: "accepted" | "rejected" | undefined;
 }
 
+/* ── Reusable checkbox multiselect dropdown (page-styled) ── */
+function MultiSelectDropdown({
+  label, options, selected, onChange, disabled, emptyText,
+}: {
+  label: string;
+  options: { value: string; label: string }[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+  disabled?: boolean;
+  emptyText?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  const toggle = (val: string) =>
+    onChange(selected.includes(val) ? selected.filter((v) => v !== val) : [...selected, val]);
+
+  const summary = selected.length === 0 ? label : `${label}: ${selected.length}`;
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((o) => !o)}
+        className={cn(
+          "px-2.5 py-1.5 border rounded bg-white text-[12.5px] outline-none flex items-center gap-1.5 min-w-[110px] disabled:opacity-50",
+          selected.length > 0 ? "border-[#C9A84C]" : "border-[#D4C9A8]",
+        )}
+      >
+        <span className={selected.length > 0 ? "font-medium text-[#1A1814]" : "text-[#6B6458]"}>{summary}</span>
+        <span className="ml-auto text-[8px] text-[#9A9490]">{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div className="absolute z-30 mt-1 min-w-[170px] max-h-[260px] overflow-auto bg-white border border-[#D4C9A8] rounded shadow-lg p-1">
+          {options.length === 0 ? (
+            <div className="px-2 py-2 text-[11px] text-[#9A9490]">{emptyText || "No options"}</div>
+          ) : (
+            <>
+              <div className="flex justify-between px-1.5 py-1 border-b border-[#EDE8DC] mb-1">
+                <button type="button" className="text-[10px] text-[#8B6914] hover:underline" onClick={() => onChange(options.map((o) => o.value))}>
+                  Select all
+                </button>
+                <button type="button" className="text-[10px] text-[#6B6458] hover:underline" onClick={() => onChange([])}>
+                  Clear
+                </button>
+              </div>
+              {options.map((o) => (
+                <label key={o.value} className="flex items-center gap-2 px-2 py-1 hover:bg-[#F5F1E8] rounded cursor-pointer text-[12px] text-[#3A3530]">
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(o.value)}
+                    onChange={() => toggle(o.value)}
+                    style={{ accentColor: "#C9A84C" }}
+                  />
+                  {o.label}
+                </label>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─────────────────────────────────────────────── */
 export default function AssortmentPlanner() {
   const { goldPrice, setGoldPrice, addToKitQueue, logAudit, setActivePage } = useIntelligence();
@@ -110,10 +186,13 @@ export default function AssortmentPlanner() {
   const [selectedClient, setSelectedClient] = useState("");
   const [kitSize, setKitSize] = useState(100);
   const [clearancePct, setClearancePct] = useState(30);
-  const [scoringWeights, setScoringWeights] = useState<ScoringWeights>({ visual: 60, attribute: 15, velocity: 15, ageing: 10 });
+  const [scoringWeights, setScoringWeights] = useState<ScoringWeights>({ segment: 30, category: 25, visual: 25, price: 20 });
   const [metalWtMax, setMetalWtMax] = useState(100);
   const [selectedSegment, setSelectedSegment] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
+  /* ── Sales-period scope (Month/Year multiselect) — BDM mode only ── */
+  const [selectedMonths, setSelectedMonths] = useState<string[]>([]);
+  const [selectedYears, setSelectedYears] = useState<string[]>([]);
   const [weightMin, setWeightMin] = useState("");
   const [weightMax, setWeightMax] = useState("");
   const [localGoldPrice, setLocalGoldPrice] = useState(goldPrice || 0);
@@ -146,6 +225,15 @@ export default function AssortmentPlanner() {
   const [elapsedSec, setElapsedSec] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  /* ── Auto-switch weights when client selected/deselected ── */
+  useEffect(() => {
+    if (selectedClient) {
+      setScoringWeights({ segment: 25, category: 20, visual: 25, price: 30 });
+    } else {
+      setScoringWeights({ segment: 30, category: 25, visual: 25, price: 20 });
+    }
+  }, [selectedClient]);
+
   /* ── Live BDM data from B2B sales ── */
   const { data: bdmListData } = useQuery({
     queryKey: ["b2b-bdm-list"],
@@ -163,9 +251,18 @@ export default function AssortmentPlanner() {
   const { data: clientsData } = useQuery({
     queryKey: ["b2b-bdm-clients", selectedBdm, selectedState],
     queryFn: () => fetchB2bClientsForBdm(selectedBdm, selectedState || undefined),
-    enabled: !!selectedBdm,
+    enabled: !!selectedBdm && !!selectedState,
   });
   const clientsForBdm = clientsData?.clients || [];
+
+  /* ── Available sale periods (months/years) for the selected BDM ── */
+  const { data: salesPeriodsData } = useQuery({
+    queryKey: ["assortment-sales-periods", selectedBdm, selectedState, selectedClient],
+    queryFn: () => fetchAssortmentSalesPeriods(selectedBdm, selectedState || undefined, selectedClient || undefined),
+    enabled: mode === "bdmstate" && !!selectedBdm,
+  });
+  const availableMonths = salesPeriodsData?.months || [];
+  const availableYears = salesPeriodsData?.years || [];
 
   /* ── Exhibition list ── */
   const { data: exhibitionListData } = useQuery({
@@ -202,10 +299,11 @@ export default function AssortmentPlanner() {
       let reweightedScore = item.score;
       if (bd && mode === "bdmstate") {
         reweightedScore = Math.round(
+          bd.segment * scoringWeights.segment +
+          bd.category * scoringWeights.category +
           bd.visual * scoringWeights.visual +
-          bd.category * scoringWeights.attribute +
-          bd.price * scoringWeights.velocity +
-          bd.ageing * scoringWeights.ageing
+          bd.price * scoringWeights.price
+        + (bd.bonus || 0)
         );
         reweightedScore = Math.max(0, Math.min(100, reweightedScore));
       }
@@ -308,9 +406,8 @@ export default function AssortmentPlanner() {
       }
     }
     const bestMatchesBase = Array.from(segmentBest.values())
-      .filter(i => i.score >= 75)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 5);
+      .filter(i => i.score >= 55)
+      .sort((a, b) => b.score - a.score);
 
     // Build a lookup: pairRoot → all suggestions with that root
     const rootToItems = new Map<string, AssortSuggestion[]>();
@@ -440,6 +537,8 @@ export default function AssortmentPlanner() {
           weightMin: weightMin ? Number(weightMin) : undefined,
           weightMax: weightMax ? Number(weightMax) : undefined,
           weights: scoringWeights,
+          months: selectedMonths.length > 0 ? selectedMonths : undefined,
+          years: selectedYears.length > 0 ? selectedYears.map(Number) : undefined,
         });
         setAiItems(result.items);
         setAiProfile(result.profile);
@@ -587,6 +686,32 @@ export default function AssortmentPlanner() {
             </div>
           </div>
         </div>
+        {/* Client preferences sub-banner */}
+        {aiProfile.clientPreferences && (
+          <div className="border border-[#D4C9A8] border-t-0 px-5 py-3" style={{ background: "linear-gradient(135deg, #F0EDE4 0%, #FAF8F2 100%)" }}>
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="font-mono text-[9px] tracking-[1.5px] text-[#6B6458] uppercase">Client Profile</span>
+              <span className="text-[13px] font-bold text-[#1A1814]">{aiProfile.clientPreferences.clientName}</span>
+              <span className="text-[10px] text-[#6B6458]">{aiProfile.clientPreferences.totalTransactions} transactions</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5 items-center mb-1.5">
+              <span className="text-[9px] text-[#6B6458] font-mono mr-1">SEGMENTS</span>
+              {aiProfile.clientPreferences.primarySegments.map(seg => (
+                <span key={seg} className="bg-[#E8F0FE] text-[#1A56CC] rounded-full px-2 py-0.5 text-[9px] font-medium">{seg}</span>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-3 text-[10px] text-[#3D3830]">
+              <span>Price: {fmt(aiProfile.clientPreferences.priceRange.min)} – {fmt(aiProfile.clientPreferences.priceRange.max)} (median {fmt(aiProfile.clientPreferences.priceRange.median)})</span>
+              <span>Weight: {aiProfile.clientPreferences.weightRange.min.toFixed(1)}g – {aiProfile.clientPreferences.weightRange.max.toFixed(1)}g</span>
+              {aiProfile.clientPreferences.stoneProfile.materialRatioPreference && (
+                <span>Material: {aiProfile.clientPreferences.stoneProfile.materialRatioPreference}</span>
+              )}
+              {aiProfile.clientPreferences.stoneProfile.preferredColours.length > 0 && (
+                <span>Colours: {aiProfile.clientPreferences.stoneProfile.preferredColours.slice(0, 3).join(", ")}</span>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -796,8 +921,8 @@ export default function AssortmentPlanner() {
             <div className="bg-white/95 backdrop-blur-sm rounded px-1.5 py-1 text-[8px] font-mono text-[#3A3530] shadow-sm border border-[#EDE8DC] max-w-[140px]">
               {mode === "bdmstate" && breakdown ? (
                 <>
-                  <div>Vis:{Math.round(breakdown.visual * 100)}% Seg:{Math.round(breakdown.category * 100)}%</div>
-                  <div>Cat:{Math.round(breakdown.price * 100)}% Pri:{Math.round(breakdown.ageing * 100)}%</div>
+                  <div>Seg:{Math.round(breakdown.segment * 100)}% Cat:{Math.round(breakdown.category * 100)}%</div>
+                  <div>Vis:{Math.round(breakdown.visual * 100)}% Pri:{Math.round(breakdown.price * 100)}%</div>
                 </>
               ) : (
                 reasons.slice(0, 2).map((r, i) => (
@@ -1023,7 +1148,7 @@ export default function AssortmentPlanner() {
           <div className="flex gap-2.5 items-center flex-wrap">
             <select
               value={selectedBdm}
-              onChange={(e) => { setSelectedBdm(e.target.value); setSelectedState(""); setSelectedClient(""); resetResults(); }}
+              onChange={(e) => { setSelectedBdm(e.target.value); setSelectedState(""); setSelectedClient(""); setSelectedMonths([]); setSelectedYears([]); resetResults(); }}
               className="min-w-[180px] px-2.5 py-1.5 border border-[#D4C9A8] rounded bg-white text-[12.5px] text-[#1A1814] focus:border-[#C9A84C] outline-none"
             >
               <option value="">{"\u2014"} Select BDM {"\u2014"}</option>
@@ -1033,7 +1158,7 @@ export default function AssortmentPlanner() {
             </select>
             <select
               value={selectedState}
-              onChange={(e) => { setSelectedState(e.target.value); setSelectedClient(""); resetResults(); }}
+              onChange={(e) => { setSelectedState(e.target.value); setSelectedClient(""); setSelectedMonths([]); setSelectedYears([]); resetResults(); }}
               disabled={!selectedBdm}
               className="min-w-[200px] px-2.5 py-1.5 border border-[#D4C9A8] rounded bg-white text-[12.5px] text-[#1A1814] focus:border-[#C9A84C] outline-none disabled:opacity-50"
             >
@@ -1045,10 +1170,10 @@ export default function AssortmentPlanner() {
             <select
               value={selectedClient}
               onChange={(e) => { setSelectedClient(e.target.value); resetResults(); }}
-              disabled={!selectedBdm}
+              disabled={!selectedBdm || !selectedState}
               className="min-w-[200px] px-2.5 py-1.5 border border-[#D4C9A8] rounded bg-white text-[12.5px] text-[#1A1814] focus:border-[#C9A84C] outline-none disabled:opacity-50"
             >
-              <option value="">{"\u2014"} Target Client (optional) {"\u2014"}</option>
+              <option value="">{!selectedState ? "\u2014 Select State first \u2014" : "\u2014 Target Client (optional) \u2014"}</option>
               {effectiveClients.map((c) => (
                 <option key={c.name} value={c.name}>
                   {c.name} {"\u2014"} {fmt(c.spend || 0)} ({c.count} txns)
@@ -1142,14 +1267,36 @@ export default function AssortmentPlanner() {
           ))}
         </select>
 
+        {/* Sales-period scope — Month + Year multiselect (BDM mode) */}
+        {mode === "bdmstate" && (
+          <div className="flex gap-2 items-center" title="Scope the BDM's sales profile to selected sale month(s)/year(s)">
+            <MultiSelectDropdown
+              label="Months"
+              options={availableMonths.map((m) => ({ value: m, label: m }))}
+              selected={selectedMonths}
+              onChange={(next) => { setSelectedMonths(next); resetResults(); }}
+              disabled={!selectedBdm}
+              emptyText={selectedBdm ? "No dated sales for this BDM" : "Select a BDM first"}
+            />
+            <MultiSelectDropdown
+              label="Years"
+              options={availableYears.map((y) => ({ value: String(y), label: String(y) }))}
+              selected={selectedYears}
+              onChange={(next) => { setSelectedYears(next); resetResults(); }}
+              disabled={!selectedBdm}
+              emptyText={selectedBdm ? "No dated sales for this BDM" : "Select a BDM first"}
+            />
+          </div>
+        )}
+
         {/* Scoring weight inputs — only for BDM mode (exhibition/location use pre-computed scores) */}
-        {mode === "bdmstate" && <div className="flex items-center gap-1.5 border border-[#D4C9A8] rounded px-2 py-1 bg-white">
+        {mode === "bdmstate" && <div className="flex items-center gap-1.5 border border-[#D4C9A8] rounded px-2 py-1 bg-white flex-wrap">
           <span className="font-mono text-[8.5px] tracking-wider text-[#6B6458] mr-1">WEIGHTS</span>
           {([
+            { key: "segment" as const, label: "Segment" },
+            { key: "category" as const, label: "Category" },
             { key: "visual" as const, label: "Visual" },
-            { key: "attribute" as const, label: "Segment" },
-            { key: "velocity" as const, label: "Category" },
-            { key: "ageing" as const, label: "Price" },
+            { key: "price" as const, label: "Price" },
           ] as const).map(({ key, label }) => (
             <div key={key} className="flex items-center gap-0.5">
               <span className="text-[10px] text-[#6B6458]">{label}</span>
@@ -1161,19 +1308,19 @@ export default function AssortmentPlanner() {
                 onChange={(e) => {
                   const val = Math.max(0, Number(e.target.value) || 0);
                   setScoringWeights(prev => {
-                    const otherSum = prev.visual + prev.attribute + prev.velocity + prev.ageing - prev[key];
+                    const otherSum = prev.segment + prev.category + prev.visual + prev.price - prev[key];
                     const capped = Math.min(val, 100 - otherSum);
                     return { ...prev, [key]: Math.max(0, capped) };
                   });
                 }}
-                className="w-[52px] px-1.5 py-1 border border-[#D4C9A8] rounded text-[12px] font-semibold text-center"
+                className="w-[44px] px-1 py-1 border border-[#D4C9A8] rounded text-[11px] font-semibold text-center"
                 style={{ fontVariantNumeric: "tabular-nums" }}
               />
               <span className="text-[9px] text-[#9A9490]">%</span>
             </div>
           ))}
           {(() => {
-            const total = scoringWeights.visual + scoringWeights.attribute + scoringWeights.velocity + scoringWeights.ageing;
+            const total = scoringWeights.segment + scoringWeights.category + scoringWeights.visual + scoringWeights.price;
             return (
               <span className={cn("font-mono text-[10px] font-bold ml-1", total === 100 ? "text-[#4A7C59]" : "text-[#A63C2A]")}>
                 ={total}%
@@ -1266,8 +1413,15 @@ export default function AssortmentPlanner() {
 
           <button
             onClick={handleGenerate}
-            disabled={isScoring}
-            className="px-5 py-2.5 bg-[#C9A84C] text-[#1A1814] text-[12.5px] font-medium rounded hover:bg-[#8B6914] hover:text-white transition-colors disabled:opacity-50"
+            disabled={isScoring || (mode === "bdmstate" && !selectedBdm) || (mode === "location" && !selectedDestination)}
+            title={
+              mode === "bdmstate" && !selectedBdm
+                ? "Select a BDM first"
+                : mode === "location" && !selectedDestination
+                ? "Select a destination store first"
+                : undefined
+            }
+            className="px-5 py-2.5 bg-[#C9A84C] text-[#1A1814] text-[12.5px] font-medium rounded hover:bg-[#8B6914] hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Generate AI Assortment
           </button>
@@ -1411,10 +1565,10 @@ export default function AssortmentPlanner() {
                     const bd = (detailItem as AssortSuggestion & { scoreBreakdown?: AiScoreBreakdown }).scoreBreakdown;
                     if (!bd) return null;
                     const dims = [
+                      { label: "Segment", val: bd.segment, weight: scoringWeights.segment, color: "#C9A84C" },
+                      { label: "Category", val: bd.category, weight: scoringWeights.category, color: "#5B21B6" },
                       { label: "Visual", val: bd.visual, weight: scoringWeights.visual, color: "#1A56CC" },
-                      { label: "Segment", val: bd.category, weight: scoringWeights.attribute, color: "#5B21B6" },
-                      { label: "Category", val: bd.price, weight: scoringWeights.velocity, color: "#8B6914" },
-                      { label: "Price", val: bd.ageing, weight: scoringWeights.ageing, color: "#8B1A1A" },
+                      { label: "Price", val: bd.price, weight: scoringWeights.price, color: "#8B6914" },
                     ];
                     return dims.map((d) => {
                       const pct = Math.round(Math.min(1, Math.max(0, d.val)) * 100);
@@ -1478,11 +1632,25 @@ export default function AssortmentPlanner() {
                 </div>
               )}
 
+              {/* Selling Price — full-width green banner when gold rate is set */}
+              {localGoldPrice > 0 && detailItem.pureWt != null && detailItem.pureWt > 0 && (
+                <div className="bg-[#F0FAF3] border border-[#B8D4BE] rounded-md px-3 py-2 mb-3 flex items-center justify-between">
+                  <div className="font-mono text-[9px] tracking-[1.5px] text-[#4A7C59] uppercase">Selling Price</div>
+                  <div className="text-[20px] font-bold text-[#4A7C59]" style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {fmt(Math.round(detailItem.tagPrice / 2 + localGoldPrice * detailItem.pureWt!))}
+                  </div>
+                </div>
+              )}
+
               {/* Details grid */}
               <div className="grid grid-cols-2 gap-2.5 mb-3.5">
                 <div>
                   <div className="font-mono text-[8px] tracking-wider text-[#6B6458]">TAG PRICE</div>
                   <div className="text-[#8B6914]" style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(detailItem.tagPrice)}</div>
+                </div>
+                <div>
+                  <div className="font-mono text-[8px] tracking-wider text-[#6B6458]">COST PRICE</div>
+                  <div style={{ fontVariantNumeric: "tabular-nums" }}>{fmt(detailItem.costPrice)}</div>
                 </div>
                 <div>
                   <div className="font-mono text-[8px] tracking-wider text-[#6B6458]">BASE METAL</div>

@@ -6,6 +6,7 @@ import { db } from "./db";
 import { referenceImages, b2cSales as b2cSalesTable, liveStockItems } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
 import multer from "multer";
+import crypto from "crypto";
 import path from "path";
 import fs from "fs/promises";
 import sharp from "sharp";
@@ -41,6 +42,7 @@ import { getActivePrompt, seedPromptVersions, incrementGenerationCount, activate
 import { extractFolderId, listImagesInFolder, downloadImage } from "./google-drive";
 import { startBatchImport, startBatchReembed, getBatchImportStatus } from "./batch-import";
 import { searchSimilarStockItems } from "./stock-vector-store";
+import { syncSalesData } from "./sales-sync";
 import { read as xlsxRead, utils as xlsxUtils } from "xlsx";
 // Lazy-imported inside route handler to avoid blocking route registration
 // import { scoreAssortment, type InventoryCandidate } from "./assortment-scorer";
@@ -493,6 +495,52 @@ export async function registerRoutes(
     { scope: "cad_rules", text: CAD_RULES },
     { scope: "grok_preamble", text: GROK_SKETCH_PREAMBLE },
   ]).catch(() => { /* table may not exist yet */ });
+
+  // -- Authentication (single shared credential, UI gate) -----------------------
+  const constantTimeEqual = (a: string, b: string): boolean => {
+    const bufA = Buffer.from(a);
+    const bufB = Buffer.from(b);
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+  };
+
+  app.post("/api/auth/login", (req, res) => {
+    const username = typeof req.body?.username === "string" ? req.body.username : "";
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
+
+    const expectedUser = process.env.AUTH_USERNAME || "";
+    const expectedPass = process.env.AUTH_PASSWORD || "";
+
+    if (!expectedUser || !expectedPass) {
+      return res.status(500).json({ message: "Login is not configured on the server." });
+    }
+
+    const ok =
+      constantTimeEqual(username, expectedUser) &&
+      constantTimeEqual(password, expectedPass);
+
+    if (!ok) {
+      return res.status(401).json({ message: "Invalid username or password" });
+    }
+
+    req.session.authenticated = true;
+    req.session.username = username;
+    return res.json({ authenticated: true, username });
+  });
+
+  app.post("/api/auth/logout", (req, res) => {
+    req.session.destroy(() => {
+      res.clearCookie("connect.sid");
+      res.json({ ok: true });
+    });
+  });
+
+  app.get("/api/auth/me", (req, res) => {
+    res.json({
+      authenticated: !!req.session.authenticated,
+      username: req.session.username ?? null,
+    });
+  });
 
   // Upload reference image
   app.post("/api/reference-images", upload.single('image'), async (req, res) => {
@@ -2201,6 +2249,7 @@ export async function registerRoutes(
       const rows = await db.execute(sql`
         SELECT DISTINCT category FROM live_stock_items
         WHERE category IS NOT NULL AND TRIM(category) <> '' AND current_status = 'On Hand'
+          AND UPPER(TRIM(category)) <> 'CLIENT REPAIR'
         ORDER BY category
       `);
       const categories = (rows.rows as { category: string }[]).map(r => r.category);
@@ -2669,13 +2718,32 @@ export async function registerRoutes(
     }
   });
 
+  // ── Image proxy (HTTPS → HTTP for ERP images) ──────────────────────────
+  app.get("/api/img-proxy", async (req, res) => {
+    const url = req.query.url as string;
+    if (!url || !url.startsWith("http://")) {
+      return res.status(400).json({ message: "Invalid url parameter" });
+    }
+    try {
+      const upstream = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      if (!upstream.ok) return res.status(upstream.status).end();
+      const contentType = upstream.headers.get("content-type") || "image/jpeg";
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      const buffer = Buffer.from(await upstream.arrayBuffer());
+      res.send(buffer);
+    } catch {
+      res.status(502).end();
+    }
+  });
+
   // ── Live Stock Items API (synced from external API) ─────────────────────
 
   // GET /api/stock-items - list with filters and pagination
   app.get("/api/stock-items", async (req, res) => {
     try {
       const page = Math.max(1, parseInt(req.query.page as string) || 1);
-      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 30));
+      const limit = Math.min(200, Math.max(1, parseInt(req.query.limit as string) || 30));
       const status = req.query.status as string | undefined;
       const category = req.query.category as string | undefined;
       const location = req.query.location as string | undefined;
@@ -2684,6 +2752,8 @@ export async function registerRoutes(
       const minPrice = req.query.minPrice ? parseFloat(req.query.minPrice as string) : undefined;
       const maxPrice = req.query.maxPrice ? parseFloat(req.query.maxPrice as string) : undefined;
       const ageingTag = req.query.ageingTag as string | undefined;
+      const salesPerson = req.query.salesPerson as string | undefined;
+      const clientName = req.query.clientName as string | undefined;
       const sortBy = (req.query.sortBy as string) || "ageingDays";
       const sortDir = (req.query.sortDir as string) === "asc" ? "ASC" : "DESC";
 
@@ -2734,6 +2804,12 @@ export async function registerRoutes(
             break;
         }
       }
+      if (salesPerson) {
+        fragments.push(sql`${liveStockItems.memoSalesPersonName} = ${salesPerson}`);
+      }
+      if (clientName) {
+        fragments.push(sql`${liveStockItems.memoClientName} = ${clientName}`);
+      }
 
       // Combine conditions
       const whereCondition = fragments.length > 0
@@ -2748,7 +2824,14 @@ export async function registerRoutes(
         jewelCode: "jewel_code",
       };
       const sortColumnName = allowedSortColumns[sortBy] || "ageing_days";
-      const orderExpr = sql.raw(`${sortColumnName} ${sortDir}`);
+
+      // Location priority: Raniwala/Jaipur stores first, then Delhi, then others
+      const orderExpr = sql`CASE
+        WHEN UPPER(${liveStockItems.location}) LIKE '%RANIWALA%' OR UPPER(${liveStockItems.location}) LIKE '%JAIPUR STORE%' THEN 2
+        WHEN UPPER(${liveStockItems.location}) LIKE '%DELHI STORE%' THEN 1
+        ELSE 0
+      END DESC, ${sql.raw(`${sortColumnName} ${sortDir}`)}`;
+
 
       const offset = (page - 1) * limit;
 
@@ -2766,12 +2849,123 @@ export async function registerRoutes(
 
       const total = countResult[0]?.count ?? 0;
 
+      // ── Set partner pull-in: find set-pair partners missing from this page ──
+      // Variant suffix (-1, -2) is part of the pairing key so NLS-1 pairs with NLSE-1 only
+      const SET_SUFFIX_RE = /^(.+?)(NLSE|LNSE|CHSE|PNSE|CNSE|NSE|NLS|LNS|CHS|PNS|CNS|BCH|NS|CS|NL|ER|BN|BR|RN|CN|HP|PN|MI)(-\d+)?$/i;
+      const basePrefixesOnPage = new Set<string>();   // design prefix without variant (for LIKE query)
+      const fullPrefixesOnPage = new Set<string>();    // design prefix + variant (for exact pairing)
+      const idsOnPage = new Set<string>();
+      for (const row of dataResult) {
+        idsOnPage.add(String(row.id));
+        const sn = (row.styleNo || "").toUpperCase().trim();
+        const m = sn.match(SET_SUFFIX_RE);
+        if (m) {
+          basePrefixesOnPage.add(m[1]);
+          fullPrefixesOnPage.add(m[1] + (m[3] || ""));
+        }
+      }
+
+      let finalItems = dataResult;
+      if (basePrefixesOnPage.size > 0) {
+        // Broad LIKE search using base prefix (finds all variants)
+        const prefixArr = Array.from(basePrefixesOnPage);
+        const likeClauses = prefixArr.map(p => sql`UPPER(${liveStockItems.styleNo}) LIKE ${p + "%"}`);
+        const prefixCondition = sql.join(likeClauses, sql` OR `);
+
+        const partnerRows = await db.select()
+          .from(liveStockItems)
+          .where(sql`(${prefixCondition}) AND ${whereCondition}`)
+          .limit(200);
+
+        // Filter: only add partners whose full prefix (with variant) matches one on the page
+        const extras: typeof dataResult = [];
+        for (const row of partnerRows) {
+          if (idsOnPage.has(String(row.id))) continue;
+          const sn = (row.styleNo || "").toUpperCase().trim();
+          const m = sn.match(SET_SUFFIX_RE);
+          if (m && fullPrefixesOnPage.has(m[1] + (m[3] || ""))) {
+            extras.push(row);
+            idsOnPage.add(String(row.id));
+          }
+        }
+        if (extras.length > 0) {
+          finalItems = [...dataResult, ...extras];
+        }
+      }
+
       res.json({
-        items: dataResult,
+        items: finalItems,
         total,
         page,
         totalPages: Math.ceil(total / limit),
       });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // GET /api/sku-performance - top sellers aggregated live from live_sales (by style_code)
+  app.get("/api/sku-performance", async (req, res) => {
+    try {
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limit = Math.min(200, Math.max(1, parseInt(req.query.limit as string) || 30));
+      const offset = (page - 1) * limit;
+      const sortBy = (req.query.sortBy as string) || "composite";
+
+      // Whitelist sort expressions (operate on aggregate aliases)
+      const sortExprs: Record<string, string> = {
+        composite: `"soldCount" DESC, "totalRevenue" DESC`,
+        units: `"soldCount" DESC`,
+        revenue: `"totalRevenue" DESC`,
+        clients: `"distinctClients" DESC`,
+      };
+      const orderExpr = sortExprs[sortBy] || sortExprs.composite;
+
+      // Only count rows that represent a real style (non-empty style_code)
+      const whereClause = sql`style_code IS NOT NULL AND TRIM(style_code) <> ''`;
+
+      const [countResult, dataResult] = await Promise.all([
+        db.execute(sql`
+          SELECT COUNT(*)::int AS count FROM (
+            SELECT 1 FROM live_sales WHERE ${whereClause} GROUP BY style_code
+          ) t
+        `),
+        db.execute(sql`
+          WITH agg AS (
+            SELECT
+              style_code AS "styleCode",
+              MAX(category) AS category,
+              COUNT(*)::int AS "soldCount",
+              COUNT(DISTINCT client_name)::int AS "distinctClients",
+              COALESCE(SUM(COALESCE(transaction_amt, tag_price, 0)), 0)::bigint AS "totalRevenue",
+              COALESCE(ROUND(AVG(COALESCE(transaction_amt, tag_price))), 0)::bigint AS "avgSalePrice",
+              MAX(image_url) AS "imageUrl"
+            FROM live_sales
+            WHERE ${whereClause}
+            GROUP BY style_code
+          )
+          SELECT * FROM agg
+          ORDER BY ${sql.raw(orderExpr)}
+          LIMIT ${limit} OFFSET ${offset}
+        `),
+      ]);
+
+      const total = (countResult.rows[0] as { count: number })?.count ?? 0;
+      const items = (dataResult.rows as Array<{
+        styleCode: string; category: string | null; soldCount: number;
+        distinctClients: number; totalRevenue: string; avgSalePrice: string; imageUrl: string | null;
+      }>).map(r => ({
+        styleCode: r.styleCode,
+        category: r.category,
+        soldCount: r.soldCount,
+        distinctClients: r.distinctClients,
+        totalRevenue: Number(r.totalRevenue),
+        avgSalePrice: Number(r.avgSalePrice),
+        imageUrl: r.imageUrl,
+      }));
+
+      res.json({ items, total, page, totalPages: Math.ceil(total / limit) });
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: msg });
@@ -2791,22 +2985,48 @@ export async function registerRoutes(
   });
 
   // GET /api/stock-items/summary - dashboard summary stats
-  app.get("/api/stock-items/summary", async (_req, res) => {
+  app.get("/api/stock-items/summary", async (req, res) => {
     try {
+      // Optional ageing filter — when set, all breakdowns except ageing pie are filtered
+      const ageingTag = req.query.ageingTag as string | undefined;
+      let ageingFilterSQL = "";
+      if (ageingTag) {
+        switch (ageingTag) {
+          case "Fresh":
+            ageingFilterSQL = " AND ageing_days >= 0 AND ageing_days <= 30";
+            break;
+          case "Active":
+            ageingFilterSQL = " AND ageing_days >= 31 AND ageing_days <= 60";
+            break;
+          case "Moderate":
+            ageingFilterSQL = " AND ageing_days >= 61 AND ageing_days <= 90";
+            break;
+          case "Slow Moving":
+            ageingFilterSQL = " AND ageing_days >= 91 AND ageing_days <= 180";
+            break;
+          case "Ageing":
+            ageingFilterSQL = " AND ageing_days >= 181 AND ageing_days <= 270";
+            break;
+          case "Non-Moving":
+            ageingFilterSQL = " AND ageing_days > 270";
+            break;
+        }
+      }
+
       // All counts and values in one pass using raw SQL for performance
-      const summaryResult = await db.execute(sql`
+      const summaryResult = await db.execute(sql.raw(`
         SELECT
           COUNT(*)::int AS "totalCount",
-          COUNT(*) FILTER (WHERE current_status = 'On Hand')::int AS "onHandCount",
-          COUNT(*) FILTER (WHERE current_status = 'Memo')::int AS "memoCount",
-          COUNT(*) FILTER (WHERE current_status = 'Sold')::int AS "soldCount",
-          COALESCE(SUM(cost_price) FILTER (WHERE current_status = 'On Hand'), 0)::bigint AS "onHandCostValue",
-          COALESCE(SUM(tag_price) FILTER (WHERE current_status = 'On Hand'), 0)::bigint AS "onHandTagValue",
-          COUNT(*) FILTER (WHERE ageing_days > 365 AND current_status = 'On Hand')::int AS "deadStockCount",
-          COALESCE(SUM(cost_price) FILTER (WHERE ageing_days > 365 AND current_status = 'On Hand'), 0)::bigint AS "deadStockCostValue",
-          COALESCE(SUM(CAST(pure_wt AS numeric)) FILTER (WHERE current_status = 'On Hand'), 0)::numeric AS "onHandPureWt"
+          COUNT(*) FILTER (WHERE current_status = 'On Hand' ${ageingFilterSQL})::int AS "onHandCount",
+          COUNT(*) FILTER (WHERE current_status = 'Memo' ${ageingFilterSQL})::int AS "memoCount",
+          COUNT(*) FILTER (WHERE current_status = 'Sold' ${ageingFilterSQL})::int AS "soldCount",
+          COALESCE(SUM(cost_price) FILTER (WHERE current_status = 'On Hand' ${ageingFilterSQL}), 0)::bigint AS "onHandCostValue",
+          COALESCE(SUM(tag_price) FILTER (WHERE current_status = 'On Hand' ${ageingFilterSQL}), 0)::bigint AS "onHandTagValue",
+          COUNT(*) FILTER (WHERE ageing_days > 365 AND current_status = 'On Hand' ${ageingFilterSQL})::int AS "deadStockCount",
+          COALESCE(SUM(cost_price) FILTER (WHERE ageing_days > 365 AND current_status = 'On Hand' ${ageingFilterSQL}), 0)::bigint AS "deadStockCostValue",
+          COALESCE(SUM(CAST(pure_wt AS numeric)) FILTER (WHERE current_status = 'On Hand' ${ageingFilterSQL}), 0)::numeric AS "onHandPureWt"
         FROM live_stock_items
-      `);
+      `));
 
       const summary = summaryResult.rows[0] as {
         totalCount: number;
@@ -2820,34 +3040,33 @@ export async function registerRoutes(
         onHandPureWt: string;
       };
 
-      // Category breakdown (top 10 by count)
-      const catResult = await db.execute(sql`
+      // Category breakdown (all categories)
+      const catResult = await db.execute(sql.raw(`
         SELECT
           COALESCE(category, 'Unknown') AS category,
           COUNT(*)::int AS count,
           COALESCE(SUM(cost_price), 0)::bigint AS "costValue",
           COALESCE(SUM(tag_price), 0)::bigint AS "tagValue"
         FROM live_stock_items
-        WHERE current_status = 'On Hand'
+        WHERE current_status = 'On Hand' AND LOWER(location) != 'client repair' ${ageingFilterSQL}
         GROUP BY category
         ORDER BY count DESC
-        LIMIT 10
-      `);
+      `));
 
       // Location breakdown
-      const locResult = await db.execute(sql`
+      const locResult = await db.execute(sql.raw(`
         SELECT
           COALESCE(location, 'Unknown') AS location,
           COUNT(*)::int AS count,
           COALESCE(SUM(cost_price), 0)::bigint AS "costValue",
           COALESCE(SUM(tag_price), 0)::bigint AS "tagValue"
         FROM live_stock_items
-        WHERE current_status = 'On Hand'
+        WHERE current_status = 'On Hand' ${ageingFilterSQL}
         GROUP BY location
         ORDER BY count DESC
-      `);
+      `));
 
-      // Ageing distribution breakdown (On Hand only)
+      // Ageing distribution breakdown (On Hand only) — NEVER filtered (this is the control)
       const ageingResult = await db.execute(sql`
         SELECT
           CASE
@@ -2861,23 +3080,51 @@ export async function registerRoutes(
           COUNT(*)::int AS count,
           COALESCE(SUM(tag_price), 0)::bigint AS "tagValue"
         FROM live_stock_items
-        WHERE current_status = 'On Hand'
+        WHERE current_status = 'On Hand' AND LOWER(location) != 'client repair'
         GROUP BY label
         ORDER BY MIN(ageing_days)
       `);
 
-      // Sales person breakdown (Memo items — gross weight + cost)
-      const bdmResult = await db.execute(sql`
+      // Product segment breakdown (On Hand only)
+      // Derive product segment from style_no theme codes (matches assortment page logic)
+      const segmentResult = await db.execute(sql.raw(`
+        SELECT segment, COUNT(*)::int AS count, COALESCE(SUM(tag_price), 0)::bigint AS "tagValue"
+        FROM (
+          SELECT tag_price,
+            CASE
+              WHEN UPPER(style_no) LIKE '%BRP%' OR UPPER(style_no) LIKE '%BRU%' THEN 'Bridal'
+              WHEN UPPER(style_no) LIKE '%BRC%' THEN 'Bridal Lite'
+              WHEN UPPER(style_no) LIKE '%SOP%' OR UPPER(style_no) LIKE '%SOLP%' THEN 'Exclusive - Grandeur'
+              WHEN UPPER(style_no) LIKE '%WRD%' OR UPPER(style_no) LIKE '%SOO%' OR UPPER(style_no) LIKE '%SOD%' THEN
+                CASE
+                  WHEN LOWER(category) LIKE '%chain%' OR LOWER(category) LIKE '%pendant%' THEN 'RTW'
+                  WHEN LOWER(category) LIKE '%earring%' OR LOWER(category) LIKE '%stud%' OR LOWER(category) LIKE '%drop%' OR LOWER(category) LIKE '%hoop%' THEN 'Ear Essentials'
+                  WHEN LOWER(category) LIKE '%bracelet%' OR LOWER(category) LIKE '%bangle%' OR LOWER(category) LIKE '%hathphool%' OR LOWER(category) LIKE '%ring%' THEN 'Handwear'
+                  WHEN LOWER(category) LIKE '%nosepin%' OR LOWER(category) LIKE '%nath%' OR LOWER(category) LIKE '%mangtika%' OR LOWER(category) LIKE '%brooch%' OR LOWER(category) LIKE '%button%' OR LOWER(category) LIKE '%kalingi%' OR LOWER(category) LIKE '%kanauti%' OR LOWER(category) LIKE '%mala%' THEN 'Add-ons'
+                  ELSE 'Modern'
+                END
+              WHEN UPPER(style_no) LIKE '%CLO%' OR UPPER(style_no) LIKE '%CLP%' OR UPPER(style_no) LIKE '%WRO%' THEN 'Traditional'
+              ELSE 'Traditional'
+            END AS segment
+          FROM live_stock_items
+          WHERE current_status = 'On Hand' AND LOWER(location) != 'client repair' ${ageingFilterSQL}
+        ) derived
+        GROUP BY segment
+        ORDER BY count DESC
+      `));
+
+      // Client memo breakdown (Memo items — gross weight + cost, grouped by client)
+      const bdmResult = await db.execute(sql.raw(`
         SELECT
-          COALESCE(memo_sales_person_name, 'Unassigned') AS "salesPerson",
+          COALESCE(memo_client_name, 'Unknown Client') AS "salesPerson",
           COUNT(*)::int AS count,
           COALESCE(SUM(CAST(NULLIF(TRIM(gross_wt), '') AS numeric)), 0)::numeric AS "grossWt",
           COALESCE(SUM(cost_price), 0)::bigint AS "costValue"
         FROM live_stock_items
-        WHERE current_status = 'Memo'
+        WHERE current_status = 'Memo' ${ageingFilterSQL}
         GROUP BY "salesPerson"
         ORDER BY "grossWt" DESC
-      `);
+      `));
 
       res.json({
         totalCount: summary.totalCount,
@@ -2903,6 +3150,11 @@ export async function registerRoutes(
         })),
         ageingBreakdown: (ageingResult.rows as Array<{ label: string; count: number; tagValue: string }>).map(r => ({
           label: r.label,
+          count: r.count,
+          tagValue: Number(r.tagValue),
+        })),
+        segmentBreakdown: (segmentResult.rows as Array<{ segment: string; count: number; tagValue: string }>).map(r => ({
+          segment: r.segment,
           count: r.count,
           tagValue: Number(r.tagValue),
         })),
@@ -3337,6 +3589,105 @@ export async function registerRoutes(
     }
   });
 
+
+  // GET /api/stock-items/:id/client-recommendations - vector-based client suggestions
+  app.get("/api/stock-items/:id/client-recommendations", async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      // Get the item's embedding vector
+      const itemResult = await db.execute(sql`
+        SELECT embedding_vector, category, stock_type, tag_price
+        FROM live_stock_items WHERE id = ${id} LIMIT 1
+      `);
+      if (itemResult.rows.length === 0) {
+        return res.status(404).json({ error: "Item not found" });
+      }
+
+      const item = itemResult.rows[0] as {
+        embedding_vector: string | null;
+        category: string | null;
+        stock_type: string | null;
+        tag_price: number;
+      };
+
+      if (!item.embedding_vector) {
+        return res.json({ recommendations: [] });
+      }
+
+      // Find visually similar sold items in b2b_sales_history using vector cosine similarity
+      // Then group by client_name to rank which clients bought the most similar designs
+      const vectorStr = String(item.embedding_vector);
+      const similarSales = await db.execute(sql`
+        SELECT
+          client_name,
+          state_name,
+          category,
+          stock_type,
+          tag_price,
+          image_link,
+          1 - (embedding_vector::vector(3072) <=> ${vectorStr}::vector(3072)) AS similarity
+        FROM b2b_sales_history
+        WHERE client_name IS NOT NULL
+          AND embedding_vector IS NOT NULL
+          AND embedding_status = 'done'
+        ORDER BY embedding_vector::vector(3072) <=> ${vectorStr}::vector(3072)
+        LIMIT 40
+      `);
+
+      // Group by client — aggregate scores
+      const clientMap = new Map<string, {
+        state: string | null;
+        matches: Array<{ similarity: number; category: string | null; imageLink: string | null; tagPrice: number | null }>;
+        totalSimilarity: number;
+      }>();
+
+      for (const row of similarSales.rows as Array<{
+        client_name: string;
+        state_name: string | null;
+        category: string | null;
+        stock_type: string | null;
+        tag_price: number | null;
+        image_link: string | null;
+        similarity: number;
+      }>) {
+        const sim = parseFloat(String(row.similarity)) || 0;
+        if (sim < 0.3) continue; // skip weak matches
+
+        const existing = clientMap.get(row.client_name);
+        if (existing) {
+          existing.matches.push({ similarity: sim, category: row.category, imageLink: row.image_link, tagPrice: row.tag_price });
+          existing.totalSimilarity += sim;
+        } else {
+          clientMap.set(row.client_name, {
+            state: row.state_name,
+            matches: [{ similarity: sim, category: row.category, imageLink: row.image_link, tagPrice: row.tag_price }],
+            totalSimilarity: sim,
+          });
+        }
+      }
+
+      // Rank: weighted score = sum of similarities (rewards both quantity and quality of matches)
+      const recommendations = Array.from(clientMap.entries())
+        .map(([clientName, data]) => ({
+          clientName,
+          state: data.state,
+          matchCount: data.matches.length,
+          topSimilarity: Math.max(...data.matches.map(m => m.similarity)),
+          avgSimilarity: data.totalSimilarity / data.matches.length,
+          score: data.totalSimilarity,
+          topMatch: data.matches.sort((a, b) => b.similarity - a.similarity)[0] ?? null,
+        }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 5);
+
+      res.json({ recommendations });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
   // ── B2B Sales History endpoints ────────────────────────────────────────
 
   app.get("/api/b2b-sales/bdm-list", async (_req, res) => {
@@ -3428,7 +3779,7 @@ export async function registerRoutes(
           tier: item.matchType === "strong" ? "STRONG MATCH" : item.matchType === "good" ? "GOOD MATCH" : "POSSIBLE",
           matchType: item.matchType,
           reasons: item.reasons,
-          scoreBreakdown: { visual: 0, category: 0, price: 0, ageing: 0, uniqueness: 0 },
+          scoreBreakdown: { segment: 0, category: 0, visual: 0, price: 0, bonus: 0 },
         };
       });
 
@@ -3458,20 +3809,20 @@ export async function registerRoutes(
       const { destination, kitSize = 100 } = req.body;
       console.log(`[location-score] Scoring for destination: ${destination || "all"}, kitSize: ${kitSize}`);
 
-      // Fetch on-hand items NOT at the destination (items to dispatch there)
-      let whereExtra = "";
-      if (destination) {
-        whereExtra = ` AND UPPER(location) NOT LIKE '%${destination.toUpperCase().replace(/'/g, "''")}%'`;
-      }
-      const candidateResult = await db.execute(sql.raw(`
+      // Fetch on-hand items NOT at the destination (items to dispatch there).
+      // Parameterized to avoid SQL injection on `destination` and to bound LIMIT.
+      const limit = Math.max(1, Math.min(1000, Math.floor(Number(kitSize) || 100))) * 3;
+      const destPattern = destination ? `%${String(destination).toUpperCase()}%` : null;
+      const candidateResult = await db.execute(sql`
         SELECT jewel_code, style_no, category, tag_price, cost_price,
                ageing_days, gross_wt, pure_wt, tot_dia_wt, stock_type,
                location, image_url, base_metal, current_status
         FROM live_stock_items
-        WHERE current_status = 'On Hand'${whereExtra}
+        WHERE current_status = 'On Hand'
+          ${destPattern ? sql`AND UPPER(location) NOT LIKE ${destPattern}` : sql``}
         ORDER BY tag_price DESC
-        LIMIT ${kitSize * 3}
-      `));
+        LIMIT ${limit}
+      `);
 
       const rows = candidateResult.rows as Record<string, unknown>[];
       const responseItems = rows.map(row => {
@@ -3505,7 +3856,7 @@ export async function registerRoutes(
           score,
           tier: score >= 80 ? "MUST INCLUDE" : score >= 60 ? "RECOMMENDED" : "OPTIONAL",
           reasons,
-          scoreBreakdown: { visual: 0, category: 0, price: 0, ageing: 0, uniqueness: 0 },
+          scoreBreakdown: { segment: 0, category: 0, visual: 0, price: 0, bonus: 0 },
         };
       });
 
@@ -3524,67 +3875,57 @@ export async function registerRoutes(
 
   // ── AI Assortment Scoring (vector-based) ─────────────────────────────────
 
+  // Distinct sale months/years available for a BDM (from dated live_sales) —
+  // populates the Month/Year multiselect filters on the Assortment page.
+  app.get("/api/assortment/sales-periods", async (req, res) => {
+    try {
+      const bdmName = String(req.query.bdm || "").trim();
+      if (!bdmName) {
+        return res.json({ months: [], years: [] });
+      }
+      const stateName = req.query.state ? String(req.query.state) : undefined;
+      const clientName = req.query.client ? String(req.query.client) : undefined;
+      const periods = await storage.getLiveSalesPeriods(bdmName, stateName, clientName);
+      res.json(periods);
+    } catch (error: unknown) {
+      console.error("[sales-periods] Error:", error);
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   app.post("/api/assortment/ai-score", async (req, res) => {
     try {
-      const { bdmName, stateName, clientName, kitSize = 100, weightMin, weightMax, weights } = req.body;
+      const { bdmName, stateName, clientName, kitSize = 100, weightMin, weightMax, weights, months, years } = req.body;
       if (!bdmName) {
         return res.status(400).json({ error: "bdmName is required" });
       }
 
-      console.log(`[ai-score] Starting vector scoring for BDM: ${bdmName}, state: ${stateName || "all"}, client: ${clientName || "all"}`);
+      // Date scope: when month(s)/year(s) are selected, profile from dated live_sales
+      const selMonths: string[] = Array.isArray(months) ? months : [];
+      const selYears: number[] = Array.isArray(years) ? years.map((y: unknown) => Number(y)).filter((y: number) => !isNaN(y)) : [];
+      const dateScoped = selMonths.length > 0 || selYears.length > 0;
 
-      // Fetch BDM's past sales (metadata for profile generation)
-      const sales = await storage.getB2bSalesByBdm(bdmName, stateName || undefined, clientName || undefined);
+      console.log(`[ai-score] Starting ${dateScoped ? "date-scoped" : "vector"} scoring for BDM: ${bdmName}, state: ${stateName || "all"}, client: ${clientName || "all"}${dateScoped ? `, period: ${selMonths.join("/") || "any month"} ${selYears.join("/") || "any year"}` : ""}`);
+
+      // Fetch BDM's past sales (metadata for profile generation).
+      // Date-scoped → dated live_sales; otherwise → embedded b2b_sales_history.
+      const sales = dateScoped
+        ? await storage.getLiveSalesByBdm(bdmName, { months: selMonths, years: selYears, stateName: stateName || undefined, clientName: clientName || undefined })
+        : await storage.getB2bSalesByBdm(bdmName, stateName || undefined, clientName || undefined);
       console.log(`[ai-score] Found ${sales.length} past sales`);
 
-      // Fallback candidates for formula scoring (when no vectors available)
-      let fallbackCandidates: Array<{ jewelCode: string; styleNo: string; category: string; tagPrice: number; costPrice: number; ageingDays: number; grossWt: string; pureWt: string; totDiaWt: string; stockType: string; location: string; imageUrl: string; baseMetal: string; currentStatus: string }> = [];
 
-      // Check if we have embedded stock (for vector path)
-      const embeddedCount = await db.execute(sql`
-        SELECT COUNT(*) as cnt FROM live_stock_items
-        WHERE embedding_vector IS NOT NULL AND embedding_status = 'done'
-      `);
-      const hasEmbeddings = Number((embeddedCount.rows[0] as { cnt: string }).cnt) > 0;
+      // Scorer handles fallback internally — fetches raw stock from DB
+      // when vector search returns 0 results (e.g., stock not yet embedded).
+      const fallbackCandidates: Array<{ jewelCode: string; styleNo: string; category: string; tagPrice: number; costPrice: number; ageingDays: number; grossWt: string; pureWt: string; totDiaWt: string; stockType: string; location: string; imageUrl: string; baseMetal: string; currentStatus: string; productSegment: string; totPolkiWt: string; totColorStoneWt: string; motif: string; motifCategory: string }> = [];
 
-      if (!hasEmbeddings) {
-        // No embeddings yet — fetch raw candidates for formula fallback
-        console.log("[ai-score] No stock embeddings found, using formula fallback");
-        let candidateQuery = `
-          SELECT jewel_code, style_no, category, tag_price, cost_price,
-                 ageing_days, gross_wt, pure_wt, tot_dia_wt, stock_type, location,
-                 image_url, base_metal, current_status
-          FROM live_stock_items
-          WHERE current_status = 'On Hand'
-        `;
-        if (weightMin) candidateQuery += ` AND CAST(NULLIF(TRIM(gross_wt), '') AS NUMERIC) >= ${Number(weightMin)}`;
-        if (weightMax) candidateQuery += ` AND CAST(NULLIF(TRIM(gross_wt), '') AS NUMERIC) <= ${Number(weightMax)}`;
-        candidateQuery += ` ORDER BY tag_price DESC LIMIT 300`;
-
-        const candidateResult = await db.execute(sql.raw(candidateQuery));
-        fallbackCandidates = (candidateResult.rows as Record<string, unknown>[]).map(row => ({
-          jewelCode: String(row.jewel_code || ""),
-          styleNo: String(row.style_no || ""),
-          category: String(row.category || ""),
-          tagPrice: Number(row.tag_price) || 0,
-          costPrice: Number(row.cost_price) || 0,
-          ageingDays: Number(row.ageing_days) || 0,
-          grossWt: String(row.gross_wt || "0"),
-          pureWt: String(row.pure_wt || "0"),
-          totDiaWt: String(row.tot_dia_wt || "0"),
-          stockType: String(row.stock_type || ""),
-          location: String(row.location || ""),
-          imageUrl: String(row.image_url || ""),
-          baseMetal: String(row.base_metal || ""),
-          currentStatus: String(row.current_status || ""),
-        }));
-      }
 
       // Run scoring (vector path if embeddings exist, formula fallback otherwise)
       const { scoreAssortment } = await import("./assortment-scorer");
       const result = await scoreAssortment(
         sales, fallbackCandidates, bdmName, stateName, clientName,
-        kitSize, weightMin, weightMax, weights
+        kitSize, weightMin, weightMax, weights,
+        dateScoped ? { forceMetadata: true, cacheSuffix: `:m=${selMonths.join(",")}:y=${selYears.join(",")}` } : undefined
       );
 
       // Build category→top client map from BDM's sales (for per-card client labels)
@@ -3663,6 +4004,181 @@ export async function registerRoutes(
       res.status(500).json({ error: msg });
     }
   });
+
+  // ── Live Sales Data (served from DB; synced via server/sales-sync.ts) ───────
+
+  const MONTH_ORDER: Record<string, number> = {
+    January: 0, February: 1, March: 2, April: 3, May: 4, June: 5,
+    July: 6, August: 7, September: 8, October: 9, November: 10, December: 11,
+  };
+
+  // Raw shape of a live_sales row as returned by db.execute (snake_case columns)
+  interface LiveSalesRow {
+    jewel_trans_date: string | null;
+    client_name: string | null;
+    state_name: string | null;
+    style_code: string | null;
+    category: string | null;
+    transaction_amt: number | null;
+    tag_price: number | null;
+    sales_person_name: string | null;
+    stock_type: string | null;
+    image_url: string | null;
+    sale_type: string | null;
+    transaction_month: string | null;
+    transaction_year: number | null;
+  }
+
+  app.get("/api/sales-data", async (_req, res) => {
+    try {
+      console.log("[sales-data] Serving from DB...");
+
+      const dbResult = await db.execute(sql`
+        SELECT jewel_trans_date, client_name, state_name, style_code, category,
+               transaction_amt, tag_price, sales_person_name, stock_type,
+               image_url, sale_type, transaction_month, transaction_year
+        FROM live_sales
+        ORDER BY jewel_trans_date DESC
+      `);
+      const allItems = dbResult.rows as unknown as LiveSalesRow[];
+
+      console.log(`[sales-data] Loaded ${allItems.length} transactions from DB`);
+
+      // Aggregate: summary, salesChannel, catRevenue, monthly, sales
+      let totalRevenue = 0;
+      let totalTxns = 0;
+      const channelMap = new Map<string, { revenue: number; count: number }>();
+      const categoryMap = new Map<string, { revenue: number; count: number }>();
+      const monthlyMap = new Map<string, number>();
+
+      const salesRows: Array<{
+        clientName: string;
+        state: string;
+        styleCode: string;
+        category: string;
+        transPrice: number;
+        tagPrice: number;
+        salesPerson: string;
+        transDate: string;
+        stock: string;
+        imageUrl: string;
+        saleType: string;
+      }> = [];
+
+      for (const item of allItems) {
+        const amt = item.transaction_amt || 0;
+        totalRevenue += amt;
+        totalTxns++;
+
+        // Channel grouping
+        const channel = item.sales_person_name || "Unknown";
+        const ch = channelMap.get(channel) || { revenue: 0, count: 0 };
+        ch.revenue += amt;
+        ch.count++;
+        channelMap.set(channel, ch);
+
+        // Category grouping
+        const cat = item.category || "Unknown";
+        const cr = categoryMap.get(cat) || { revenue: 0, count: 0 };
+        cr.revenue += amt;
+        cr.count++;
+        categoryMap.set(cat, cr);
+
+        // Monthly grouping (YYYY-MM)
+        const monthKey = `${item.transaction_year}-${String((MONTH_ORDER[item.transaction_month ?? ""] ?? 0) + 1).padStart(2, "0")}`;
+        monthlyMap.set(monthKey, (monthlyMap.get(monthKey) || 0) + amt);
+
+        // Transaction date: ISO → YYYY-MM-DD
+        const transDate = item.jewel_trans_date ? item.jewel_trans_date.split("T")[0] : "";
+
+        salesRows.push({
+          clientName: item.client_name || "",
+          state: item.state_name || "",
+          styleCode: item.style_code || "",
+          category: cat,
+          transPrice: amt,
+          tagPrice: item.tag_price || 0,
+          salesPerson: channel,
+          transDate,
+          stock: item.stock_type || "",
+          imageUrl: item.image_url || "",
+          saleType: item.sale_type || "",
+        });
+      }
+
+      // Sort aggregations
+      const salesChannel = Array.from(channelMap.entries())
+        .map(([SalesPersonName, v]) => ({ SalesPersonName, revenue: v.revenue, count: v.count }))
+        .sort((a, b) => b.revenue - a.revenue);
+
+      const catRevenue = Array.from(categoryMap.entries())
+        .map(([CategoryGroup, v]) => ({ CategoryGroup, revenue: v.revenue, count: v.count }))
+        .sort((a, b) => b.revenue - a.revenue);
+
+      const monthly = Array.from(monthlyMap.entries())
+        .map(([month_str, revenue]) => ({ month_str, revenue }))
+        .sort((a, b) => a.month_str.localeCompare(b.month_str));
+
+      // Summary stats
+      const MONTH_LABELS = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      let peakMonth = "";
+      let peakRevenue = 0;
+      for (const m of monthly) {
+        if (m.revenue > peakRevenue) {
+          peakRevenue = m.revenue;
+          // Format "2026-05" → "May 2026"
+          const [yr, mo] = m.month_str.split("-");
+          peakMonth = `${MONTH_LABELS[parseInt(mo, 10)] || mo} ${yr}`;
+        }
+      }
+
+      const topChannel = salesChannel[0] || { SalesPersonName: "", revenue: 0 };
+      const topCategory = catRevenue[0] || { CategoryGroup: "", revenue: 0 };
+
+      const result = {
+        summary: {
+          totalRevenue,
+          totalTxns,
+          peakMonth,
+          peakRevenue,
+          topChannel: topChannel.SalesPersonName,
+          topChannelRevenue: topChannel.revenue,
+          topCategory: topCategory.CategoryGroup,
+          topCategoryRevenue: topCategory.revenue,
+        },
+        salesChannel,
+        catRevenue,
+        monthly,
+        sales: salesRows,
+      };
+
+      console.log(`[sales-data] Served ${totalTxns} txns, ${fmt_revenue(totalRevenue)} revenue`);
+
+      res.json(result);
+    } catch (error: unknown) {
+      console.error("[sales-data] Error:", error);
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Manual incremental sync trigger — fetches new/changed records from the ERP API
+  app.post("/api/sales/sync", async (_req, res) => {
+    try {
+      const result = await syncSalesData("Add / Update");
+      res.json(result);
+    } catch (error: unknown) {
+      console.error("[sales/sync] Error:", error);
+      const msg = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  function fmt_revenue(n: number): string {
+    if (n >= 10_000_000) return `₹${(n / 10_000_000).toFixed(1)}Cr`;
+    if (n >= 100_000) return `₹${(n / 100_000).toFixed(1)}L`;
+    return `₹${n.toLocaleString("en-IN")}`;
+  }
 
   return httpServer;
 }

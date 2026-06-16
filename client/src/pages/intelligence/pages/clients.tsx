@@ -1,9 +1,10 @@
 import { useState, useMemo } from "react";
-import { DATA } from "../lib/intelligence-data";
-import { fmt, fmtN } from "../lib/intelligence-utils";
+import { useQuery } from "@tanstack/react-query";
+import { fetchSalesData } from "@/lib/api";
+import { fmt, fmtN, aggregateClientsFromSales } from "../lib/intelligence-utils";
 import { cn } from "@/lib/utils";
 import { CLIENTS_PER_PAGE } from "../lib/intelligence-constants";
-import { Users, Snowflake, IndianRupee, RotateCcw, Search } from "lucide-react";
+import { Users, Snowflake, IndianRupee, RotateCcw, Search, Loader2 } from "lucide-react";
 
 /* ---------- stat card ---------- */
 
@@ -164,7 +165,16 @@ export default function ClientProfiles() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
 
-  const clients = DATA.clientDetail || [];
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["sales-data"],
+    queryFn: fetchSalesData,
+    staleTime: 15 * 60 * 1000,
+  });
+
+  const clients = useMemo(
+    () => (data?.sales ? aggregateClientsFromSales(data.sales) : []),
+    [data]
+  );
 
   const coldClients = useMemo(
     () => clients.filter((c) => c.isCold),
@@ -173,7 +183,11 @@ export default function ClientProfiles() {
 
   const totalClients = clients.length;
   const coldCount = coldClients.length;
-  const avgOrderValue = DATA.summary.avgOrderValue;
+  /* avg order value across all transactions, from live summary */
+  const avgOrderValue =
+    data && data.summary.totalTxns > 0
+      ? Math.round(data.summary.totalRevenue / data.summary.totalTxns)
+      : 0;
 
   /* re-engage: cold clients that were previously high spenders (above avg order) */
   const reEngageCount = useMemo(
@@ -195,6 +209,30 @@ export default function ClientProfiles() {
         (c.city && c.city.toLowerCase().includes(q))
     );
   }, [baseList, search]);
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 gap-3">
+        <Loader2 className="w-8 h-8 animate-spin text-[#C9A84C]" />
+        <p className="text-[13px] text-[#6B6458]" style={{ fontFamily: "'DM Mono', monospace" }}>
+          Loading live client data...
+        </p>
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 gap-3">
+        <p className="text-[14px] text-red-600 font-medium">
+          Failed to load client data
+        </p>
+        <p className="text-[12px] text-[#6B6458]">
+          {error instanceof Error ? error.message : "Unknown error"}
+        </p>
+      </div>
+    );
+  }
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / CLIENTS_PER_PAGE));
   const safePage = Math.min(page, totalPages);

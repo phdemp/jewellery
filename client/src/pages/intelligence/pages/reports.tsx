@@ -1,17 +1,43 @@
-import { useState, useMemo } from "react";
-import { DATA, EXHIBITION_DATA } from "../lib/intelligence-data";
-import { fmt, fmtN, ageTagClass, downloadCSV, getPriceBand } from "../lib/intelligence-utils";
+import { useState, useMemo, createContext, useContext } from "react";
+import { useQuery } from "@tanstack/react-query";
+import {
+  fmt, fmtN, downloadCSV, getPriceBand,
+  liveToInventoryItem, liveToSalesTransactions, aggregateClientsFromSales,
+} from "../lib/intelligence-utils";
 import { REPORT_DEFS, MONTH_NAMES, AGEING_RANGES } from "../lib/intelligence-constants";
 import { cn } from "@/lib/utils";
-import type { InventoryItem, SalesTransaction, MemoItem } from "../lib/intelligence-types";
+import type { InventoryItem, SalesTransaction } from "../lib/intelligence-types";
+import { fetchStockItems, fetchSalesData, fetchExhibitionList } from "@/lib/api";
+import type { ExhibitionSummary } from "@/lib/api";
 import * as XLSX from "xlsx";
 
 type ReportKey = keyof typeof REPORT_DEFS;
 
-// Cast as-const arrays to mutable interface types for iteration safety
-const inventory = DATA.inventory as unknown as InventoryItem[];
-const sales = DATA.sales as unknown as SalesTransaction[];
-const memoItems = DATA.memoItems as unknown as MemoItem[];
+interface MemoLite {
+  salesPerson: string;
+  tagPrice: number;
+}
+
+// Live data shared across all report renderers (fetched once in ReportsPage).
+interface ReportsData {
+  inventory: InventoryItem[];
+  sales: SalesTransaction[];
+  memoItems: MemoLite[];
+  exhibitions: ExhibitionSummary[];
+  onHandCount: number;
+  peakMonth: string;
+  peakRevenue: number;
+}
+
+const ReportsDataContext = createContext<ReportsData | null>(null);
+
+function useReportsData(): ReportsData {
+  const ctx = useContext(ReportsDataContext);
+  if (!ctx) throw new Error("useReportsData must be used within ReportsDataContext");
+  return ctx;
+}
+
+const AGEING_ORDER = ["Fresh", "Active", "Moderate", "Slow Moving", "Ageing", "Non-Moving"];
 
 // --------------------------------------------------------------------------
 // Summary stat helper
@@ -133,6 +159,7 @@ function ReportTable({
 // --------------------------------------------------------------------------
 
 function TopSellingReport() {
+  const { sales } = useReportsData();
   const grouped = useMemo(() => {
     const map = new Map<string, { units: number; revenue: number; clients: Set<string> }>();
     for (const s of sales) {
@@ -150,7 +177,7 @@ function TopSellingReport() {
         clients: d.clients.size,
       }))
       .sort((a, b) => b.units - a.units);
-  }, []);
+  }, [sales]);
 
   const totalUnits = grouped.reduce((s, r) => s + r.units, 0);
   const totalRevenue = grouped.reduce((s, r) => s + r.revenue, 0);
@@ -188,9 +215,21 @@ function TopSellingReport() {
 }
 
 function DeadStockReport() {
+  const { inventory, onHandCount } = useReportsData();
   const items = useMemo(
-    () => [...DATA.deadStock].sort((a, b) => b["Ageing Days"] - a["Ageing Days"]),
-    []
+    () =>
+      inventory
+        .filter((i) => i.status === "On Hand" && i.ageingDays > 365)
+        .map((i) => ({
+          "Jewel Code": i.jewelCode,
+          "Style No": i.styleNo,
+          "Cat Simple": i.catSimple,
+          "Location Name": i.location,
+          "Tag Price": i.tagPrice,
+          "Ageing Days": i.ageingDays,
+        }))
+        .sort((a, b) => b["Ageing Days"] - a["Ageing Days"]),
+    [inventory]
   );
 
   const totalValue = items.reduce((s, r) => s + r["Tag Price"], 0);
@@ -215,7 +254,7 @@ function DeadStockReport() {
           { label: "Dead Stock Items", value: String(items.length) },
           { label: "Total Tag Value", value: fmt(totalValue) },
           { label: "Avg Ageing", value: avgAgeing + " days" },
-          { label: "% of Inventory", value: ((items.length / DATA.summary.onHand) * 100).toFixed(1) + "%" },
+          { label: "% of Inventory", value: onHandCount ? ((items.length / onHandCount) * 100).toFixed(1) + "%" : "---" },
         ]}
       />
       <ReportTable
@@ -233,7 +272,25 @@ function DeadStockReport() {
 }
 
 function AgeingReport() {
-  const buckets = DATA.ageing;
+  const { inventory } = useReportsData();
+
+  // Ageing buckets derived live (On Hand only)
+  const buckets = useMemo(() => {
+    const map = new Map<string, { count: number; cost_val: number; tag_val: number }>();
+    for (const item of inventory) {
+      if (item.status !== "On Hand") continue;
+      const e = map.get(item.ageingTag) || { count: 0, cost_val: 0, tag_val: 0 };
+      e.count += 1;
+      e.cost_val += item.costPrice;
+      e.tag_val += item.tagPrice;
+      map.set(item.ageingTag, e);
+    }
+    return AGEING_ORDER.filter((tag) => map.has(tag)).map((tag) => ({
+      "Ageing Tag": tag,
+      ...map.get(tag)!,
+    }));
+  }, [inventory]);
+
   const totalCount = buckets.reduce((s, b) => s + b.count, 0);
   const totalCost = buckets.reduce((s, b) => s + b.cost_val, 0);
   const totalTag = buckets.reduce((s, b) => s + b.tag_val, 0);
@@ -249,7 +306,7 @@ function AgeingReport() {
       entry[item.ageingTag] = (entry[item.ageingTag] || 0) + 1;
     }
     return Array.from(map.entries()).map(([loc, counts]) => ({ location: loc, ...counts }));
-  }, []);
+  }, [inventory]);
 
   const cols: TableColumn[] = [
     { header: "Ageing Bucket", accessor: (r) => String(r["Ageing Tag"]) },
@@ -315,9 +372,22 @@ function AgeingReport() {
 }
 
 function MarginReport() {
+  const { inventory } = useReportsData();
   const items = useMemo(
-    () => [...DATA.highMargin].sort((a, b) => b.GP_pct - a.GP_pct),
-    []
+    () =>
+      inventory
+        .filter((i) => i.status === "On Hand")
+        .map((i) => ({
+          "Jewel Code": i.jewelCode,
+          "Style No": i.styleNo,
+          "Cat Simple": i.catSimple,
+          "Tag Price": i.tagPrice,
+          GP_pct: i.gp,
+          "Ageing Tag": i.ageingTag,
+        }))
+        .sort((a, b) => b.GP_pct - a.GP_pct)
+        .slice(0, 100),
+    [inventory]
   );
 
   const avgGP = items.length
@@ -359,6 +429,7 @@ function MarginReport() {
 }
 
 function AssortmentMixReport() {
+  const { inventory } = useReportsData();
   // Build price band x category matrix
   const matrix = useMemo(() => {
     const bandCats = new Map<string, Map<string, number>>();
@@ -391,7 +462,7 @@ function AssortmentMixReport() {
     });
 
     return { rows, cats, bands };
-  }, []);
+  }, [inventory]);
 
   const totalItems = matrix.rows.reduce((s, r) => s + (r.total as number), 0);
 
@@ -428,12 +499,13 @@ function AssortmentMixReport() {
 }
 
 function ClientReport() {
+  const { sales } = useReportsData();
   const clients = useMemo(() => {
-    return DATA.clientDetail
+    return aggregateClientsFromSales(sales)
       .filter((c) => c.txnCount > 0)
       .sort((a, b) => b.totalSpend - a.totalSpend)
       .slice(0, 50);
-  }, []);
+  }, [sales]);
 
   const totalSpend = clients.reduce((s, c) => s + c.totalSpend, 0);
   const totalTxns = clients.reduce((s, c) => s + c.txnCount, 0);
@@ -456,7 +528,6 @@ function ClientReport() {
     { header: "Total Spend", accessor: (r) => fmt(r.totalSpend as number), align: "right" },
     { header: "Transactions", accessor: (r) => fmtN(r.txnCount as number), align: "right" },
     { header: "Avg Order", accessor: (r) => fmt(r.avgOrder as number), align: "right" },
-    { header: "Avg GP%", accessor: (r) => (r.avgGP as number).toFixed(1) + "%", align: "right" },
     {
       header: "Segment",
       accessor: (r) => clientTag(r as unknown as typeof clients[number]),
@@ -502,7 +573,6 @@ function ClientReport() {
                   <td className="px-3 py-2 text-[12.5px] border-b border-[#EDE7D8] text-right" style={{ color: "#3D3830" }}>{fmt(c.totalSpend)}</td>
                   <td className="px-3 py-2 text-[12.5px] border-b border-[#EDE7D8] text-right" style={{ color: "#3D3830" }}>{fmtN(c.txnCount)}</td>
                   <td className="px-3 py-2 text-[12.5px] border-b border-[#EDE7D8] text-right" style={{ color: "#3D3830" }}>{fmt(c.avgOrder)}</td>
-                  <td className="px-3 py-2 text-[12.5px] border-b border-[#EDE7D8] text-right" style={{ color: "#3D3830" }}>{c.avgGP.toFixed(1)}%</td>
                   <td className="px-3 py-2 text-[12.5px] border-b border-[#EDE7D8]">
                     <span className={cn("px-2 py-0.5 rounded-full text-[10px] font-medium", clientTagClass(tag))}>{tag}</span>
                   </td>
@@ -514,18 +584,27 @@ function ClientReport() {
       </div>
       <ExportBar
         filename="client-performance-report.csv"
-        headers={["Client Name", "Total Spend", "Transactions", "Avg Order", "Avg GP%", "Segment"]}
-        rows={clients.map((c) => [c.name, c.totalSpend, c.txnCount, c.avgOrder, c.avgGP, clientTag(c)])}
+        headers={["Client Name", "Total Spend", "Transactions", "Avg Order", "Segment"]}
+        rows={clients.map((c) => [c.name, c.totalSpend, c.txnCount, c.avgOrder, clientTag(c)])}
       />
     </>
   );
 }
 
 function ChannelReport() {
-  const channels = useMemo(
-    () => [...DATA.salesChannel].sort((a, b) => b.revenue - a.revenue),
-    []
-  );
+  const { sales } = useReportsData();
+  const channels = useMemo(() => {
+    const map = new Map<string, { revenue: number; count: number }>();
+    for (const s of sales) {
+      const e = map.get(s.salesPerson) || { revenue: 0, count: 0 };
+      e.revenue += s.transPrice;
+      e.count += 1;
+      map.set(s.salesPerson, e);
+    }
+    return Array.from(map.entries())
+      .map(([SalesPersonName, d]) => ({ SalesPersonName, revenue: d.revenue, count: d.count }))
+      .sort((a, b) => b.revenue - a.revenue);
+  }, [sales]);
   const totalRevenue = channels.reduce((s, c) => s + c.revenue, 0);
   const totalCount = channels.reduce((s, c) => s + c.count, 0);
   const maxRevenue = channels.length ? channels[0].revenue : 1;
@@ -607,10 +686,20 @@ function ChannelReport() {
 }
 
 function MonthlyReport() {
-  const months = DATA.monthly;
+  const { sales, peakMonth, peakRevenue } = useReportsData();
+  const months = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const s of sales) {
+      const mk = s.transDate ? s.transDate.slice(0, 7) : "";
+      if (mk) map.set(mk, (map.get(mk) || 0) + s.transPrice);
+    }
+    return Array.from(map.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([month_str, revenue]) => ({ month_str, revenue }));
+  }, [sales]);
   const totalRevenue = months.reduce((s, m) => s + m.revenue, 0);
   const avgRevenue = months.length ? totalRevenue / months.length : 0;
-  const maxRevenue = Math.max(...months.map((m) => m.revenue));
+  const maxRevenue = Math.max(...months.map((m) => m.revenue), 1);
 
   // Cumulative
   let cumulative = 0;
@@ -632,8 +721,8 @@ function MonthlyReport() {
         stats={[
           { label: "FY Revenue", value: fmt(totalRevenue) },
           { label: "Monthly Avg", value: fmt(Math.round(avgRevenue)) },
-          { label: "Peak Month", value: DATA.summary.peakMonth },
-          { label: "Peak Revenue", value: fmt(DATA.summary.peakRevenue) },
+          { label: "Peak Month", value: peakMonth },
+          { label: "Peak Revenue", value: fmt(peakRevenue) },
         ]}
       />
       <div className="overflow-x-auto">
@@ -699,20 +788,40 @@ function MonthlyReport() {
 }
 
 function BdmPerfReport() {
-  const bdms = useMemo(
-    () => [...DATA.bdmPerformance].sort((a, b) => b.revenue - a.revenue),
-    []
-  );
+  const { sales, memoItems } = useReportsData();
+
+  // BDM performance derived live from sales rows
+  const bdms = useMemo(() => {
+    const map = new Map<string, { revenue: number; sold: number; clients: Set<string> }>();
+    for (const s of sales) {
+      const name = s.salesPerson || "Unknown";
+      const e = map.get(name) || { revenue: 0, sold: 0, clients: new Set<string>() };
+      e.revenue += s.transPrice;
+      e.sold += 1;
+      if (s.clientName) e.clients.add(s.clientName);
+      map.set(name, e);
+    }
+    return Array.from(map.entries())
+      .map(([SalesPersonName, d]) => ({
+        SalesPersonName,
+        revenue: d.revenue,
+        sold_count: d.sold,
+        clients: d.clients.size,
+        avg_order: d.sold > 0 ? Math.round(d.revenue / d.sold) : 0,
+      }))
+      .sort((a, b) => b.revenue - a.revenue);
+  }, [sales]);
+
   const totalRevenue = bdms.reduce((s, b) => s + b.revenue, 0);
   const totalSold = bdms.reduce((s, b) => s + b.sold_count, 0);
   const totalClients = bdms.reduce((s, b) => s + b.clients, 0);
   const maxRevenue = bdms.length ? bdms[0].revenue : 1;
 
-  // Memo summary per BDM
+  // Memo summary per BDM (live Memo stock items)
   const memoByBdm = useMemo(() => {
     const map = new Map<string, { count: number; value: number }>();
     for (const m of memoItems) {
-      const key = m.bdm || m.salesPerson;
+      const key = m.salesPerson;
       if (!key || key === "nan") continue;
       const entry = map.get(key) || { count: 0, value: 0 };
       entry.count += 1;
@@ -720,7 +829,7 @@ function BdmPerfReport() {
       map.set(key, entry);
     }
     return map;
-  }, []);
+  }, [memoItems]);
 
   return (
     <>
@@ -797,17 +906,16 @@ function BdmPerfReport() {
 }
 
 function ExhibitionReport() {
-  const exhibitions = EXHIBITION_DATA.exhibitions;
-  const totalInterests = EXHIBITION_DATA.totalInterests;
-  const totalSkus = EXHIBITION_DATA.totalUniqueSkus;
-  const totalTag = EXHIBITION_DATA.totalTagValue;
+  const { exhibitions } = useReportsData();
+  const totalInterests = exhibitions.reduce((s, e) => s + e.interestCount, 0);
+  const totalSkus = exhibitions.reduce((s, e) => s + e.uniqueSkuCount, 0);
+  const totalCustomers = exhibitions.reduce((s, e) => s + e.customerCount, 0);
 
   const cols: TableColumn[] = [
     { header: "Exhibition", accessor: (r) => String(r.name) },
-    { header: "Type", accessor: (r) => String(r.type) },
     { header: "Interest Count", accessor: (r) => fmtN(r.interestCount as number), align: "right" },
     { header: "Unique SKUs", accessor: (r) => fmtN(r.uniqueSkuCount as number), align: "right" },
-    { header: "Tag Value", accessor: (r) => fmt(r.totalTagValue as number), align: "right" },
+    { header: "Customers", accessor: (r) => fmtN(r.customerCount as number), align: "right" },
   ];
 
   return (
@@ -817,24 +925,25 @@ function ExhibitionReport() {
           { label: "Exhibitions", value: String(exhibitions.length) },
           { label: "Total Interests", value: fmtN(totalInterests) },
           { label: "Unique SKUs", value: fmtN(totalSkus) },
-          { label: "Total Tag Value", value: fmt(totalTag) },
+          { label: "Total Customers", value: fmtN(totalCustomers) },
         ]}
       />
       <ReportTable
         columns={cols}
         rows={exhibitions as unknown as Record<string, unknown>[]}
-        totalRow={{ name: "TOTAL", type: "", interestCount: totalInterests, uniqueSkuCount: totalSkus, totalTagValue: totalTag } as unknown as Record<string, unknown>}
+        totalRow={{ name: "TOTAL", interestCount: totalInterests, uniqueSkuCount: totalSkus, customerCount: totalCustomers } as unknown as Record<string, unknown>}
       />
       <ExportBar
         filename="exhibition-report.csv"
-        headers={["Exhibition", "Type", "Interest Count", "Unique SKUs", "Tag Value"]}
-        rows={exhibitions.map((e) => [e.name, e.type, e.interestCount, e.uniqueSkuCount, e.totalTagValue])}
+        headers={["Exhibition", "Interest Count", "Unique SKUs", "Customers"]}
+        rows={exhibitions.map((e) => [e.name, e.interestCount, e.uniqueSkuCount, e.customerCount])}
       />
     </>
   );
 }
 
 function CrossAnalysisReport() {
+  const { inventory, sales } = useReportsData();
   // Margin by category
   const marginByCat = useMemo(() => {
     const map = new Map<string, { count: number; totalGP: number; totalCost: number; totalTag: number }>();
@@ -858,19 +967,34 @@ function CrossAnalysisReport() {
         margin: d.totalTag ? ((d.totalTag - d.totalCost) / d.totalTag) * 100 : 0,
       }))
       .sort((a, b) => b.margin - a.margin);
-  }, []);
+  }, [inventory]);
 
-  // Working capital analysis by location
+  // Working capital analysis by location (live, dead = ageing > 365 days)
   const workingCapital = useMemo(() => {
-    return DATA.locUtilization.map((loc) => ({
-      location: loc["Location Name"],
-      totalCost: loc.total_cost,
-      deadCost: loc.dead_cost,
-      deadPct: loc.dead_pct,
-      avgAgeing: loc.avg_ageing,
-      utilScore: loc.utilization_score,
-    }));
-  }, []);
+    const map = new Map<string, { total_cost: number; dead_cost: number; ageingSum: number; count: number }>();
+    for (const item of inventory) {
+      if (item.status !== "On Hand") continue;
+      const e = map.get(item.location) || { total_cost: 0, dead_cost: 0, ageingSum: 0, count: 0 };
+      e.total_cost += item.costPrice;
+      e.ageingSum += item.ageingDays;
+      e.count += 1;
+      if (item.ageingDays > 365) e.dead_cost += item.costPrice;
+      map.set(item.location, e);
+    }
+    return Array.from(map.entries())
+      .map(([location, d]) => {
+        const deadPct = d.total_cost > 0 ? (d.dead_cost / d.total_cost) * 100 : 0;
+        return {
+          location,
+          totalCost: d.total_cost,
+          deadCost: d.dead_cost,
+          deadPct,
+          avgAgeing: d.count ? d.ageingSum / d.count : 0,
+          utilScore: 100 - deadPct,
+        };
+      })
+      .sort((a, b) => b.totalCost - a.totalCost);
+  }, [inventory]);
 
   // Demand-supply: compare sales velocity vs stock
   const demandSupply = useMemo(() => {
@@ -896,7 +1020,7 @@ function CrossAnalysisReport() {
           : "N/A",
       }))
       .sort((a, b) => b.sold - a.sold);
-  }, []);
+  }, [inventory, sales]);
 
   const marginCols: TableColumn[] = [
     { header: "Category", accessor: (r) => String(r.category) },
@@ -1031,6 +1155,55 @@ export default function ReportsPage() {
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
 
+  // ── Live data sources ──
+  const { data: stockData, isLoading: stockLoading } = useQuery({
+    queryKey: ["stock-items", "On Hand", 5000],
+    queryFn: () => fetchStockItems({ status: "On Hand", limit: 5000 }),
+  });
+  const { data: memoData, isLoading: memoLoading } = useQuery({
+    queryKey: ["stock-items", "Memo", 5000],
+    queryFn: () => fetchStockItems({ status: "Memo", limit: 5000 }),
+  });
+  const { data: salesData, isLoading: salesLoading } = useQuery({
+    queryKey: ["sales-data"],
+    queryFn: fetchSalesData,
+    staleTime: 15 * 60 * 1000,
+  });
+  const { data: exhibitionData } = useQuery({
+    queryKey: ["exhibition-list"],
+    queryFn: fetchExhibitionList,
+  });
+
+  const reportsData = useMemo<ReportsData>(() => {
+    const inventory = (stockData?.items ?? []).map(liveToInventoryItem);
+    const sales = liveToSalesTransactions(salesData?.sales ?? []);
+    const memoItems: MemoLite[] = (memoData?.items ?? []).map((i) => ({
+      salesPerson: i.memoSalesPersonName ?? "",
+      tagPrice: i.tagPrice,
+    }));
+    const exhibitions = exhibitionData?.exhibitions ?? [];
+    const onHandCount = inventory.filter((i) => i.status === "On Hand").length;
+
+    // Peak month from live sales
+    const monthMap = new Map<string, number>();
+    for (const s of sales) {
+      const mk = s.transDate ? s.transDate.slice(0, 7) : "";
+      if (mk) monthMap.set(mk, (monthMap.get(mk) || 0) + s.transPrice);
+    }
+    let peakMonth = "—";
+    let peakRevenue = 0;
+    Array.from(monthMap.entries()).forEach(([mk, rev]) => {
+      if (rev > peakRevenue) {
+        peakRevenue = rev;
+        peakMonth = MONTH_NAMES[mk] || mk;
+      }
+    });
+
+    return { inventory, sales, memoItems, exhibitions, onHandCount, peakMonth, peakRevenue };
+  }, [stockData, memoData, salesData, exhibitionData]);
+
+  const isLoading = stockLoading || salesLoading || memoLoading;
+
   const reportKeys = Object.keys(REPORT_DEFS) as ReportKey[];
 
   function renderReport(key: ReportKey) {
@@ -1063,7 +1236,8 @@ export default function ReportsPage() {
   }
 
   return (
-    <div>
+    <ReportsDataContext.Provider value={reportsData}>
+      <div>
       <div style={{ height: 2, background: "linear-gradient(90deg, #C9A84C, transparent)", marginBottom: 20, borderRadius: 1 }} />
       {/* Report cards grid */}
       <div className="grid grid-cols-4 gap-[14px] mb-6">
@@ -1179,7 +1353,17 @@ export default function ReportsPage() {
           </div>
 
           {/* Report content */}
-          <div>{renderReport(selectedReport)}</div>
+          <div>
+            {isLoading ? (
+              <div className="flex items-center justify-center py-16">
+                <p className="text-[13px] text-[#6B6458]" style={{ fontFamily: "'DM Mono', monospace" }}>
+                  Loading live data...
+                </p>
+              </div>
+            ) : (
+              renderReport(selectedReport)
+            )}
+          </div>
         </div>
       ) : (
         <div className="flex items-center justify-center h-40 rounded-lg border border-dashed border-[#D4C9A8]">
@@ -1191,6 +1375,7 @@ export default function ReportsPage() {
           </p>
         </div>
       )}
-    </div>
+      </div>
+    </ReportsDataContext.Provider>
   );
 }

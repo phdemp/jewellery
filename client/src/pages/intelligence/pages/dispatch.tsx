@@ -1,11 +1,10 @@
 import { useState, useMemo } from "react";
-import { DATA } from "../lib/intelligence-data";
 import { fmt, getDriveImgUrl, ageTagClass, generateKitId, downloadCSV } from "../lib/intelligence-utils";
 import { useIntelligence } from "../intelligence-context";
 import { cn } from "@/lib/utils";
 import type { DispatchKit, TransferSuggestion } from "../lib/intelligence-types";
 import { useQuery } from "@tanstack/react-query";
-import { fetchStockSummary } from "@/lib/api";
+import { fetchStockSummary, fetchSalesData } from "@/lib/api";
 
 type Tab = "exhibition" | "bdm" | "store" | "approval";
 
@@ -33,23 +32,56 @@ export default function DispatchPlanner() {
   // BDM filter
   const [bdmFilter, setBdmFilter] = useState("");
 
-  // Use live locations from summary if available
+  // Live stock summary (locations) + sales data (BDM performance)
   const { data: liveSummary } = useQuery({
     queryKey: ["stock-summary"],
-    queryFn: fetchStockSummary,
+    queryFn: () => fetchStockSummary(),
+  });
+  const { data: salesData } = useQuery({
+    queryKey: ["sales-data"],
+    queryFn: fetchSalesData,
+    staleTime: 15 * 60 * 1000,
   });
 
   const locations = useMemo(() => {
-    if (liveSummary?.locationBreakdown?.length) {
-      return liveSummary.locationBreakdown
-        .map((l) => l.location)
-        .filter(Boolean)
-        .sort();
-    }
-    return (DATA.locationStock || []).map((l) => l["Location Name"]);
+    return (liveSummary?.locationBreakdown ?? [])
+      .map((l) => l.location)
+      .filter(Boolean)
+      .sort();
   }, [liveSummary]);
 
-  const bdmKeys = useMemo(() => Object.keys(DATA.bdmStates || {}), []);
+  // BDM performance derived from live sales rows (gross sales, excl. returns)
+  const bdmPerformance = useMemo(() => {
+    const rows = salesData?.sales ?? [];
+    interface Acc { revenue: number; sold: number; clients: Set<string> }
+    const map = new Map<string, Acc>();
+    for (const r of rows) {
+      if (r.saleType === "Sales Return" || r.transPrice < 0) continue;
+      const name = r.salesPerson || "Unknown";
+      let e = map.get(name);
+      if (!e) {
+        e = { revenue: 0, sold: 0, clients: new Set() };
+        map.set(name, e);
+      }
+      e.revenue += r.transPrice;
+      e.sold += 1;
+      if (r.clientName) e.clients.add(r.clientName);
+    }
+    return Array.from(map.entries())
+      .map(([SalesPersonName, e]) => ({
+        SalesPersonName,
+        revenue: e.revenue,
+        sold_count: e.sold,
+        avg_order: e.sold > 0 ? Math.round(e.revenue / e.sold) : 0,
+        clients: e.clients.size,
+      }))
+      .sort((a, b) => b.revenue - a.revenue);
+  }, [salesData]);
+
+  const bdmKeys = useMemo(
+    () => bdmPerformance.map((b) => b.SalesPersonName),
+    [bdmPerformance]
+  );
 
   // ---- Exhibition Tab ----
   const exhibitionKits = useMemo(
@@ -67,39 +99,24 @@ export default function DispatchPlanner() {
     return kits;
   }, [kitQueue, bdmFilter]);
 
-  const bdmPerformance = useMemo(() => DATA.bdmPerformance || [], []);
-
   // ---- Store Transfer Tab ----
-  const transferSuggestions = useMemo(() => {
-    let items = ([...(DATA.transferSuggestions || [])] as unknown) as TransferSuggestion[];
-    if (fromLocation)
-      items = items.filter((t) => t.fromLocation === fromLocation);
-    if (toLocation) items = items.filter((t) => t.toLocation === toLocation);
-    if (transferCatFilter)
-      items = items.filter((t) => t.category === transferCatFilter);
-    if (transferSort === "priority") {
-      items.sort((a, b) => {
-        const p = { HIGH: 0, MEDIUM: 1 };
-        return (p[a.priority] ?? 2) - (p[b.priority] ?? 2);
-      });
-    } else if (transferSort === "qty") {
-      items.sort((a, b) => b.suggestQty - a.suggestQty);
-    }
-    return items;
-  }, [fromLocation, toLocation, transferCatFilter, transferSort]);
+  // NOTE: inter-store transfer detection has no backend endpoint yet, so there
+  // is no live data source. We intentionally render an empty list (honest empty
+  // state) rather than the previous fabricated DATA.transferSuggestions.
+  const transferSuggestions = useMemo<TransferSuggestion[]>(() => [], []);
 
   const transferKits = useMemo(
     () => kitQueue.filter((k) => k.kind === "transfer" && k.status === "prepared"),
     [kitQueue],
   );
 
+  // Category filter options sourced from live stock categories
   const transferCategories = useMemo(() => {
-    const cats = new Set<string>();
-    for (const t of DATA.transferSuggestions || []) {
-      cats.add(t.category);
-    }
-    return Array.from(cats).sort();
-  }, []);
+    return (liveSummary?.categoryBreakdown ?? [])
+      .map((c) => c.category)
+      .filter(Boolean)
+      .sort();
+  }, [liveSummary]);
 
   // ---- Kit Approval Tab ----
   const approvalQueue = useMemo(() => {
